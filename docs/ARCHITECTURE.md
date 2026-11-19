@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **design only. No code exists yet.** Everything below is the target design (Proposed) except where marked [VERIFIED]. Update this file in the same change as any implementation; when code and this file disagree, fix this file.
+Status: **design, with the data provider implemented (see section 10).** Everything below is the target design (Proposed) except where marked [VERIFIED]. Update this file in the same change as any implementation; when code and this file disagree, fix this file.
 
 Last updated: 2026-11-20.
 
@@ -178,4 +178,6 @@ See `docs/DECISIONS.md` for the full records. Summary:
 
 | Component | Status |
 |---|---|
-| All | Not started |
+| Config (`config/settings.py`: `DbSettings` from env, read-only session options) | Implemented |
+| Historical Data Provider (`data/provider.py` interface, `data/postgres_provider.py`) | Implemented: `get_instruments`, `get_index_members` (parsing of `companies` text), `get_raw_bars` (raw, not cleaned) |
+| Everything else | Not started |

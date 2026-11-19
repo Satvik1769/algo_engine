@@ -1,7 +1,7 @@
 # Project Plan
 
 Last updated: 2026-11-20 (documentation setup session).
-**Current phase: Milestone 1 (repository and data analysis) is complete; data source located (remote `univest` DB). Most open questions are answered (see section 4). Waiting for the user's go-ahead to start Milestone 2.**
+**Current phase: Milestone 2 complete. Next: Milestone 3 (data validation and normalization). Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -10,7 +10,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | # | Milestone | Priority | MVP | Status |
 |---|---|---|---|---|
 | 1 | Repository and data infrastructure analysis | P0 | Yes | **Done** (docs only) |
-| 2 | Historical data access layer | P0 | Yes | Not started |
+| 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
 | 3 | Data validation and normalization | P0 | Yes | Not started |
 | 4 | Core event-driven engine | P0 | Yes | Not started |
 | 5 | Strategy interface and indicator engine | P0 | Yes | Not started |
@@ -82,7 +82,7 @@ Open:
 - Objective: Provide a read-only, parameterized, configurable way to fetch raw and instrument metadata for given fin_codes/dates.
 - Scope: Postgres provider, config/env handling, instrument lookup by symbol/fin_code. No cleaning logic (that is M3).
 - Components: `data/provider.py` (interface), `data/postgres_provider.py`, `config/`.
-- Tasks: [ ] project scaffold (requirements.txt, venv, pytest, ruff) [ ] `.gitignore` [ ] DB settings via env [ ] `get_instruments(symbols)` [ ] `get_raw_bars(fin_codes, start, end)` [ ] read-only connection [ ] test DB fixtures.
+- Tasks: [x] project scaffold (requirements.txt, requirements-dev.txt, .venv on 3.12, pytest.ini; ruff deferred) [x] `.gitignore` [x] DB settings via env [x] `get_instruments(fin_codes)` [x] `get_index_members` [x] `get_raw_bars(fin_codes, start, end, stock_type)` [x] read-only connection [x] tests. Deviation: lookup is by fin_code (symbol lookup not needed yet); no ruff yet.
 - Dependencies: M1; O2, O4.
 - Deliverables: provider class + tests + README setup notes.
 - Acceptance: returns raw rows for the Nifty 50 index and sample equities; no writes possible; no credentials in code; parameterized SQL only.
@@ -157,10 +157,12 @@ Open:
 
 ## 6. Completed Tasks
 
+- 2026-11-20: Milestone 2. Files: `src/algo_engine/config/settings.py`, `data/provider.py`, `data/postgres_provider.py`; tests `tests/unit/` (12) and `tests/integration/` (5, live, skipped without credentials). All 17 passed. Raw bars query filters by fin_code + IST date, NSE default, cast to float, ordered, undeduplicated. Index members parsed from `index_companies_mapping`. Writes rejected (verified by test). Remote queries are fast with the fin_code index.
 - 2026-11-20: Repository and database inspection (read-only); four documentation files created. No application code or DB changes.
 
 ## 7. Next Recommended Tasks
 
-1. User confirms open items O1–O7 (at minimum O2 and O3) and says go.
+1. Milestone 3: IST `trading_date`, dedupe (NSE only), OHLC validation, `DataQualityReport`, corporate-action adjustment from `corporate_actions` (first inspect its `type`/`ex_date` values and assert adjusted series against `last_day_close_price`), trading calendar from the data itself (the union of Nifty 50 index and member dates), new `algo` schema table for bars (O2, needs user OK), data fingerprint.
+2. User: confirm O2 (bars table location), O3 (capital), O5, O7.
 2. Milestone 2, task 1 (proposed first task): scaffold the project (`requirements.txt`, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the remote DB read-only (Nifty 50 index plus the seven large caps). No engine work yet.
 3. Then Milestone 3 normalization with a deterministic data-quality report.
