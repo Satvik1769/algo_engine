@@ -1,7 +1,7 @@
 # Project Plan
 
 Last updated: 2026-11-20 (documentation setup session).
-**Current phase: Milestone 1 (repository and data analysis) is complete. Waiting for user approval and answers to open questions before starting Milestone 2.**
+**Current phase: Milestone 1 (repository and data analysis) is complete; data source located (remote `univest` DB). Waiting for user approval and answers to open questions before starting Milestone 2.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -10,7 +10,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | # | Milestone | Priority | MVP | Status |
 |---|---|---|---|---|
 | 1 | Repository and data infrastructure analysis | P0 | Yes | **Done** (docs only) |
-| 2 | Historical data access layer | P0 | Yes | Not started (blocked by K1 for equities) |
+| 2 | Historical data access layer | P0 | Yes | Not started |
 | 3 | Data validation and normalization | P0 | Yes | Not started |
 | 4 | Core event-driven engine | P0 | Yes | Not started |
 | 5 | Strategy interface and indicator engine | P0 | Yes | Not started |
@@ -40,7 +40,11 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 
 ## 3. Known Issues (verified 2026-11-20 against local DB `postgres`)
 
-- **K1 (blocking for equity backtests):** `stock_prices_five_years` has 4,837 rows for only 3 fin_codes, all indices: Nifty 50 (100256265; 2015-10-16 → 2025-12-10; 2,567 rows), Nifty Midcap 150 (100266249; 2022-08-25 →; 797), Nifty Smallcap 250 (394453227; 2020-01-06 →; 1,473). No Nifty 50 constituent has price data locally. `company_master` has the stocks (e.g. RELIANCE 100325, TCS 132540, INFY 100209, HDFCBANK 100180, ICICIBANK 132174, SBIN 100112, ITC 100875). Another database/environment may hold the real data; none of `postgres2`, `soniclens` has these tables.
+- **K1 (resolved 2026-11-20, scope still to verify):** The local DB only has 3 index series, but the remote `univest` DB (read-only; credentials via env, never in repo) has equity history. Seven large caps checked (RELIANCE 100325, TCS 132540, INFY 100209, HDFCBANK 100180, ICICIBANK 132174, SBIN 100112, ITC 100875): 2018-01-01 → 2026-09-21. Still unverified: the full Nifty 50 list, per-symbol NSE coverage (HDFCBANK NSE starts 2025-06-18 only), and survivorship.
+- **K11:** Prices are **unadjusted** (RELIANCE ~₹2,611 in Jan 2024 vs ~₹1,240 in 2026 after the bonus). Corporate actions exist remotely (93,938 rows) but their quality is unverified. Adjustment is required before backtesting (ADR-0005).
+- **K12:** Remote table mixes `stock_type` NSE and BSE; BSE data is noisier. Use NSE only unless NSE is missing. Duplicate rows per date are common (RELIANCE NSE: 1,914 rows for 1,852 dates).
+- **K13:** Remote table is ~21M rows; unfiltered aggregates exceed a 60 s timeout. Always filter by `fin_code`; cache normalized bars locally.
+- **K14 (security):** A production-style DB password was pasted in chat. It is not stored in the repo. Recommend rotating it, creating a dedicated read-only role for this project, and restricting the host/IP.
 - **K2:** The source table has no PK/unique constraint/index; duplicates exist: 66 `(fin_code, updated_time)` pairs (identical OHLC) and additional same-IST-date rows with different timestamps (Nifty 50: 2,567 rows vs 2,502 distinct dates).
 - **K3:** No Nifty 50 TRI series available (`indices` empty). Nifty 50 price index exists as fin_code 100256265. Need a TRI source (NSE/niftyindices CSV) or must use price index with an explicit label.
 - **K4:** Zero-valued O/H/L in 2 rows (2025-01-06 IST, Nifty 50 and Midcap 150). 265 null `open_price` rows. Index volume is 0/NULL.
@@ -53,8 +57,8 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 
 ## 4. Open Questions (need user answers; see end of chat summary)
 
-- Q1: Where is the real equity price data (other DB, host, dump, vendor)? Can it be loaded into the local DB, or should the engine point at a different database?
-- Q2: Are equity prices in the source split/bonus-adjusted? What adjustment source do we have?
+- Q1 (answered: remote `univest` DB). Follow-up: may we create a read-only role, and may we copy normalized bars to local Parquet/Postgres?
+- Q2 (partly answered: prices are unadjusted). Follow-up: is `corporate_actions` reliable enough to compute adjustment factors, or do we get adjusted data from elsewhere?
 - Q3: Source and acceptance for the Nifty 50 constituent list and the Nifty 50 TRI series?
 - Q4: Cost model scope: delivery (CNC) only, or intraday (MIS) too? Initial capital (e.g. ₹10 lakh)?
 - Q5: Long-only for the MVP, or allow short selling?
@@ -78,7 +82,7 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - Tasks: [ ] project scaffold (pyproject, venv, pytest, ruff) [ ] `.gitignore` [ ] DB settings via env [ ] `get_instruments(symbols)` [ ] `get_raw_bars(fin_codes, start, end)` [ ] read-only connection [ ] test DB fixtures.
 - Dependencies: M1; Q1, Q6.
 - Deliverables: provider class + tests + README setup notes.
-- Acceptance: returns raw rows for 3 index fin_codes; no writes possible; no credentials in code; parameterized SQL only.
+- Acceptance: returns raw rows for the Nifty 50 index and sample equities; no writes possible; no credentials in code; parameterized SQL only.
 - Tests: unit (SQL building/param binding, config), integration against a temporary schema/fixture, error on unknown fin_code, empty range, DB down.
 - Risks/edge cases: no indexes → slow scans (add a documented migration index only with approval); `numeric` → float conversion; timezone; unknown symbol; multiple fin_codes per symbol.
 
@@ -154,6 +158,6 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 
 ## 7. Next Recommended Tasks
 
-1. User answers Q1–Q8 (especially Q1 equity data location, Q2 adjustments).
-2. Milestone 2, task 1 (proposed first task): scaffold the project (pyproject, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the 3 existing index series. No engine work yet.
+1. User answers the remaining questions (Q2 follow-up on corporate actions, Q3–Q8).
+2. Milestone 2, task 1 (proposed first task): scaffold the project (pyproject, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the remote DB read-only (Nifty 50 index plus the seven large caps). No engine work yet.
 3. Then Milestone 3 normalization with a deterministic data-quality report.

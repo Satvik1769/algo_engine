@@ -40,7 +40,7 @@ Template:
 ## ADR-0003: Database access via SQLAlchemy Core + psycopg, read-only
 - Date: 2026-11-20
 - Status: Proposed
-- Decision: A `MarketDataProvider` interface with a PostgreSQL implementation using SQLAlchemy Core (text/parameterized SQL) and psycopg 3, returning pandas DataFrames. The connection uses a read-only role/transaction and settings from environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, or a `DATABASE_URL`). Local default is the unix socket `/tmp`, database `postgres`.
+- Decision: A `MarketDataProvider` interface with a PostgreSQL implementation using SQLAlchemy Core (text/parameterized SQL) and psycopg 3, returning pandas DataFrames. The connection uses a read-only role/transaction and settings from environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, or a `DATABASE_URL`). Source is the remote `univest` database (see ADR-0008). Never hardcode credentials.
 - Context: No existing application code or connection config exists in the repo. The local server uses OS-user auth over a unix socket. The source tables have no keys or indexes.
 - Alternatives considered: raw psycopg only (fewer dependencies, but weaker pooling/URL handling); full ORM (unneeded for read-only analytical queries); pandas `read_sql` with a raw DBAPI connection (deprecated warnings).
 - Reason for selection: Parameterized queries, URL-based config and portability with minimal abstraction.
@@ -82,3 +82,12 @@ Template:
 - Alternatives considered: including the dashboard in MVP; implementing several strategies at once.
 - Reason: Smallest vertical slice that proves correctness.
 - Trade-offs: Visualization arrives later; early results are read from files/notebook output.
+
+## ADR-0008: Remote `univest` database is the source of historical data (read-only)
+- Date: 2026-11-20
+- Status: Accepted (user directed use of the remote DB)
+- Decision: Historical bars and `company_master` are read from the remote PostgreSQL `univest` DB. Access is read-only (`default_transaction_read_only=on`, `statement_timeout`), always filtered by `fin_code`, with NSE rows only. Credentials are supplied via environment variables; none are stored in the repo or docs.
+- Context (verified): Local DB has only 3 index series; remote has equities from 2018 to 2026-09-21 for the 7 large caps checked. Table is ~21M rows with no PK/unique constraint; indexes exist on `fin_code` only (plus price columns).
+- Alternatives considered: local DB (lacks equities); full copy of the remote table (unnecessary size); direct engine reads from remote on each run (slow, non-reproducible, load on a production-style DB).
+- Reason for selection: It is where the data is, and per-`fin_code` queries are fast with the existing index. Normalized per-symbol bars are cached locally (ADR-0004) so runs are reproducible and do not hit the remote DB.
+- Trade-offs: Network dependency and exposure of a shared DB. Mitigation: read-only role, cached snapshots with a data fingerprint, rotate the pasted password (PROJECT_PLAN K14).

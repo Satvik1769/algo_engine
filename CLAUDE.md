@@ -16,23 +16,23 @@ This is quantitative research first. We want to know why a strategy works, in wh
 
 - Repository: only `README.md` and PyCharm `.idea/` exist. No code, no dependencies file, no tests. [VERIFIED 2026-11-20 repo state]
 - Python 3.12 is the PyCharm SDK setting; `python3` on PATH is 3.10 with no pandas installed. [VERIFIED]
-- Data lives in a local PostgreSQL 15.15 (Homebrew), unix socket `/tmp:5432`, database **`postgres`**, schema `public`, OS user `macbook`. [VERIFIED]
-- **The local `stock_prices_five_years` contains NO Nifty 50 stocks.** It has 4,837 rows for 3 *index* fin_codes only (Nifty 50, Nifty Midcap 150, Nifty Smallcap 250). Equity price history must be loaded before stock backtests. See `docs/PROJECT_PLAN.md` (Known Issues) and `docs/DECISIONS.md` ADR-0004. [VERIFIED]
+- **Authoritative data source: remote PostgreSQL 15.18, host `34.14.174.6:5432`, database `univest`** (the app's production-style DB; user `postgres`). Credentials come from environment variables only (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`) and must never be written to the repo, docs, or logs. All access is **read-only** (`default_transaction_read_only=on`, set a `statement_timeout`). The table is ~21M rows (691,796 fin_codes); unfiltered aggregates time out, so always filter by `fin_code`. [VERIFIED]
+- A local Homebrew PostgreSQL (`/tmp:5432`, db `postgres`) holds a partial copy with indices only (no equities). Do not use it for backtests. [VERIFIED]
+- Equity price history exists in the remote DB for Nifty 50 names (checked 7 large caps: 2018-01-01 → 2026-09-21; see §3). Prices are **unadjusted**. See ADR-0005 and ADR-0008. [VERIFIED]
 - Milestone status lives in `docs/PROJECT_PLAN.md`. Do not duplicate it here.
 
 ## 3. Data Facts You Must Not Forget (verified; re-verify if in doubt)
 
-`stock_prices_five_years` columns: `fin_code bigint`, `stock_type varchar` (all 'NSE'), `open_price`, `close_price`, `high_price`, `low_price`, `volume_traded` (all `numeric`), `updated_time bigint`, `created_at numeric`, `last_day_close_price numeric`, `oi numeric`. **No primary key, no unique constraint, no index.**
+`stock_prices_five_years` columns: `fin_code bigint`, `stock_type varchar` ('NSE' or 'BSE'), `open_price`, `close_price`, `high_price`, `low_price`, `volume_traded` (all `numeric`), `updated_time bigint`, `created_at numeric`, `last_day_close_price numeric`, `oi numeric`. The app's JPA entity declares the logical key `(fin_code, updated_time, stock_type)`, but the DB has **no PK/unique constraint**. Remote indexes: btree on `fin_code`, `(fin_code, high_price)`, `high_price`, and an expression index on `to_timestamp(updated_time/1000)`.
 
-- Full OHLC is present. Volume column exists but is 0 or NULL for index rows (and may be for others). Equity volume is unverified.
-- The trading date is derived from `updated_time` (epoch **milliseconds**). Its time-of-day varies by era (00:00, 05:30, 16:00, 16:05 IST seen), so always convert to `Asia/Kolkata` and take the date. Never use raw timestamps as keys.
-- `created_at` is a load timestamp with mixed units (seconds in some rows, milliseconds in others). Do not use it for market logic.
-- The same `(fin_code, updated_time)` occurs more than once (66 pairs); OHLC values were identical in all 66. Several same-day rows also have different `updated_time` values (e.g. 2 extra IST dates for Nifty 50). Loader must dedupe deterministically and report it.
-- Bad rows exist: 2 rows with open/high/low = 0 (both on 2025-01-06 IST, with close non-zero). Reject or quarantine, never silently use.
-- Prices look **unadjusted** for equities as far as can be determined; there is no adjustment-factor column. `corporate_actions` exists but is empty locally. Treat adjusted-price handling as unresolved until equity data exists.
-- `company_master.fin_code` is the primary key and the join key (`stock_prices_five_years.fin_code = company_master.fin_code`). Equity rows: `segment='E'`, `instrument_type IS NULL`, `deleted` false/NULL. Index rows: `segment='I'`. `symbol`, `isin`, `kite_trading_symbol` are the identifiers; `isin` is sparsely populated, so verify before using it as a key.
-- There is no Nifty 50 constituent table and no historical index membership. No Nifty 50 TRI series exists locally. The `indices` table is empty.
-- `holiday_list` has 15 rows, all dated 2022-01-26. It cannot serve as a trading calendar.
+- Full OHLCV exists for equities (volume real; 0/NULL for indices). **Filter `stock_type='NSE'`**: rows are stored for both NSE and BSE, and BSE data is much noisier (e.g. RELIANCE: 283 zero-open rows on BSE vs 64 on NSE).
+- Trading date = IST date of `updated_time` (epoch **milliseconds**). Time-of-day varies by era (23:00, 16:00, 00:00, 16:05, 15:55 IST...), so convert to `Asia/Kolkata` and take the date. Never key on raw timestamps. `created_at` is a load time with mixed units.
+- **Duplicates are real**: RELIANCE NSE has 1,914 rows for 1,852 trading dates (53 dates with 2 rows, 3 with 3, 1 with 4); the loader must dedupe deterministically and report it. Zero-open/zero-OHLC rows also exist (RELIANCE NSE: 64 zero opens); reject or quarantine, never silently use.
+- **Prices are unadjusted**: RELIANCE closed ~₹2,611 on 2024-01-01 (pre-bonus) versus ~₹1,240 in 2026. Corporate actions are needed (`corporate_actions` has 93,938 rows remotely; schema in the ADR-0005 work). `last_day_close_price` is available per row (useful for cross-checking).
+- **Coverage is uneven**: HDFCBANK (fin_code 100180) NSE rows start only 2025-06-18 (older history is under BSE); similar gaps are likely for other names (mergers, relistings). Verify per symbol before use.
+- Latest data date seen: 2026-09-21 (data may lag the current date).
+- `company_master.fin_code` is the primary key and the join key. Equity rows: `segment='E'`, `instrument_type IS NULL`, `deleted` false/NULL. Index rows: `segment='I'`. `isin` is populated for the large caps checked; `kite_trading_symbol` was NULL for them (do not rely on it for Kite mapping).
+- `holiday_list` has 61 rows remotely (15 locally, all 2022-01-26): coverage unverified, do not trust as a trading calendar yet. `indices` has 216 rows remotely (content unverified). No Nifty 50 constituent table, no membership history, and no Nifty 50 TRI series found yet. Nifty 50 index (fin_code 100256265) exists remotely: 2,702 rows 2015-10-16 → 2026-09-21, with 0 volume.
 
 ## 4. Architecture Principles
 
