@@ -1,10 +1,11 @@
-"""Database settings, read from environment variables only. Secrets are never stored in code."""
+"""Database settings, read from environment variables (optionally seeded from an untracked .env). Secrets are never stored in code."""
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
 from sqlalchemy.engine import URL
 
 
@@ -24,7 +25,10 @@ class DbSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DbSettings:
-        env = os.environ if env is None else env
+        if env is None:
+            # Real environment variables win over .env (override=False); .env is optional.
+            load_dotenv(override=False)
+            env = os.environ
         missing = [k for k in ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD") if not env.get(k)]
         if missing:
             raise ConfigError(f"Missing required environment variables: {', '.join(missing)}")
