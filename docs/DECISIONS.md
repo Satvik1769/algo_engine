@@ -30,7 +30,7 @@ Template:
 
 ## ADR-0002: Repository layout and Python version
 - Date: 2026-11-20
-- Status: Proposed
+- Status: Accepted by user 2026-11-20 (dependency file amended by ADR-0009)
 - Decision: `src/` layout with package `algo_engine`; `tests/` split into `unit/` and `integration/`; `configs/` for YAML run configs; `docs/`. Python 3.12 in a project venv, dependencies in `pyproject.toml`.
 - Context: Repository is empty (README only). PyCharm SDK is Python 3.12, system `python3` is 3.10 and has no pandas.
 - Alternatives considered: flat layout; requirements.txt only; Python 3.13 (installed via Homebrew).
@@ -39,7 +39,7 @@ Template:
 
 ## ADR-0003: Database access via SQLAlchemy Core + psycopg, read-only
 - Date: 2026-11-20
-- Status: Proposed
+- Status: Accepted by user 2026-11-20
 - Decision: A `MarketDataProvider` interface with a PostgreSQL implementation using SQLAlchemy Core (text/parameterized SQL) and psycopg 3, returning pandas DataFrames. The connection uses a read-only role/transaction and settings from environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, or a `DATABASE_URL`). Source is the remote `univest` database (see ADR-0008). Never hardcode credentials.
 - Context: No existing application code or connection config exists in the repo. The local server uses OS-user auth over a unix socket. The source tables have no keys or indexes.
 - Alternatives considered: raw psycopg only (fewer dependencies, but weaker pooling/URL handling); full ORM (unneeded for read-only analytical queries); pandas `read_sql` with a raw DBAPI connection (deprecated warnings).
@@ -91,3 +91,12 @@ Template:
 - Alternatives considered: local DB (lacks equities); full copy of the remote table (unnecessary size); direct engine reads from remote on each run (slow, non-reproducible, load on a production-style DB).
 - Reason for selection: It is where the data is, and per-`fin_code` queries are fast with the existing index. Normalized per-symbol bars are cached locally (ADR-0004) so runs are reproducible and do not hit the remote DB.
 - Trade-offs: Network dependency and exposure of a shared DB. Mitigation: read-only role, cached snapshots with a data fingerprint, rotate the pasted password (PROJECT_PLAN K14).
+
+## ADR-0009: Scope, universe, adjustments, and dependency file (user answers)
+- Date: 2026-11-20
+- Status: Accepted (user answers)
+- Decision: (1) Corporate adjustments are derived from the `corporate_actions` table, which the user states is reliable (supersedes the open question in ADR-0005; the raw-vs-adjusted fill convention still needs to be fixed in M3, default per ADR-0005). (2) The Nifty 50 universe is read from `index_companies_mapping` (row `fin_code=100256265`, comma-separated member fin_codes), as a current snapshot. (3) Product scope is delivery (CNC), long-only, cash account. (4) Normalized bars are stored in a new table, never in the source tables (confirms ADR-0004; location is open item O2). (5) Dependencies are tracked in `requirements.txt` (pinned), kept in sync with code; this amends ADR-0002, which proposed `pyproject.toml`. Python 3.12 venv and `src/` layout stay.
+- Context: User answered Q1-Q8 on 2026-11-20. Verified: the Nifty 50 row has 50 members, all with NSE price rows, though HDFCBANK NSE history begins only 2025-06-18 and 12 other members start after 2018.
+- Alternatives considered: pyproject.toml with extras (more standard for packaging, but the user asked for requirements.txt); point-in-time constituents (not available).
+- Reason for selection: Follows the user's direction and uses existing data.
+- Trade-offs: Current-snapshot membership keeps survivorship bias, so reports must carry that label. requirements.txt does not separate runtime and dev tools unless we add `requirements-dev.txt`. Long-only/delivery excludes shorting and intraday strategies (e.g. pairs trading needs a later ADR).

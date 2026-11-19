@@ -1,7 +1,7 @@
 # Project Plan
 
 Last updated: 2026-11-20 (documentation setup session).
-**Current phase: Milestone 1 (repository and data analysis) is complete; data source located (remote `univest` DB). Waiting for user approval and answers to open questions before starting Milestone 2.**
+**Current phase: Milestone 1 (repository and data analysis) is complete; data source located (remote `univest` DB). Most open questions are answered (see section 4). Waiting for the user's go-ahead to start Milestone 2.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -55,16 +55,19 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - **K9:** No `.gitignore`, no dependency file, no venv. `.idea/` is untracked state in the repo directory. The only commit is "Initial commit".
 - **K10:** `company_master` is large (939,667 rows, mostly derivatives); equity filter is `segment='E' AND instrument_type IS NULL AND NOT deleted` (21,758 rows). Filtering must use explicit `fin_code` lists for the Nifty 50.
 
-## 4. Open Questions (need user answers; see end of chat summary)
+## 4. Questions
 
-- Q1 (answered: remote `univest` DB). Follow-up: may we create a read-only role, and may we copy normalized bars to local Parquet/Postgres?
-- Q2 (partly answered: prices are unadjusted). Follow-up: is `corporate_actions` reliable enough to compute adjustment factors, or do we get adjusted data from elsewhere?
-- Q3: Source and acceptance for the Nifty 50 constituent list and the Nifty 50 TRI series?
-- Q4: Cost model scope: delivery (CNC) only, or intraday (MIS) too? Initial capital (e.g. ₹10 lakh)?
-- Q5: Long-only for the MVP, or allow short selling?
-- Q6: Approve Python 3.12 venv + `src/` layout + SQLAlchemy/psycopg (ADR-0002/0003)?
-- Q7: Is it acceptable to create a new schema/table or Parquet cache for normalized bars (ADR-0004)?
-- Q8: Should the git repo get a `.gitignore` (venv, .env, .idea, data, caches)?
+Answered 2026-11-20:
+- Q1 remote `univest` DB. Q2/corporate actions: `corporate_actions` is reliable (adjustment source). Q3 constituents: `index_companies_mapping` (current snapshot only); TRI still not located (see open). Q4 delivery only (capital still unset). Q5 long-only. Q6 approved (Python 3.12 venv, `src/`, SQLAlchemy+psycopg); dependencies tracked in `requirements.txt` (ADR-0009). Q7 new table for normalized bars. Q8 "use already one": no root `.gitignore` exists (only `.idea/.gitignore`), see open.
+
+Open:
+- O1: Nifty 50 **TRI** series source. User confirmed Nifty 50 `fin_code = 100256265` (2026-11-20). Verified this is the **price index** (close 25,758 on 2025-12-10; volume 0), not a TRI. Decision: benchmark = this series, labeled "Nifty 50 (price return)" in all reports until a TRI series is supplied. The dividend gap understates the benchmark by roughly 1.2-1.5%/yr [ASSUMPTION, not measured].
+- O2: Where does the new bars table live? Proposal: local PostgreSQL (`/tmp:5432`, db `postgres`, new schema `algo`), because the remote DB is shared/production-style. Please confirm, or name the target.
+- O3: Initial capital (default proposal: ₹10,00,000, configurable).
+- O4: `.gitignore`: which existing file did you mean? Proposal: create a root `.gitignore` (venv, `.env`, `.idea/`, caches, `data/`) at scaffold time.
+- O5: Member price history shorter than the backtest window (HDFCBANK NSE from 2025-06-18; JIOFIN 2023; ETERNAL 2021): how to treat? Proposal: use BSE rows or other `fin_code` history only if verified; otherwise the symbol enters the universe from its first valid NSE date.
+- O6: Corporate-action details to confirm at M3: which `type` values map to split/bonus/dividend, and whether `ex_date` is reliable (columns are varchar). The user says the table is reliable; M3 will still assert adjusted series against `last_day_close_price`.
+- O7: Backtest date range (proposal: 2018-01-01 onward, subject to O5), and risk-free rate (proposal: configurable, default e.g. 6.5%/yr).
 
 ## 5. Milestone Details
 
@@ -79,8 +82,8 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - Objective: Provide a read-only, parameterized, configurable way to fetch raw and instrument metadata for given fin_codes/dates.
 - Scope: Postgres provider, config/env handling, instrument lookup by symbol/fin_code. No cleaning logic (that is M3).
 - Components: `data/provider.py` (interface), `data/postgres_provider.py`, `config/`.
-- Tasks: [ ] project scaffold (pyproject, venv, pytest, ruff) [ ] `.gitignore` [ ] DB settings via env [ ] `get_instruments(symbols)` [ ] `get_raw_bars(fin_codes, start, end)` [ ] read-only connection [ ] test DB fixtures.
-- Dependencies: M1; Q1, Q6.
+- Tasks: [ ] project scaffold (requirements.txt, venv, pytest, ruff) [ ] `.gitignore` [ ] DB settings via env [ ] `get_instruments(symbols)` [ ] `get_raw_bars(fin_codes, start, end)` [ ] read-only connection [ ] test DB fixtures.
+- Dependencies: M1; O2, O4.
 - Deliverables: provider class + tests + README setup notes.
 - Acceptance: returns raw rows for the Nifty 50 index and sample equities; no writes possible; no credentials in code; parameterized SQL only.
 - Tests: unit (SQL building/param binding, config), integration against a temporary schema/fixture, error on unknown fin_code, empty range, DB down.
@@ -91,7 +94,7 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - Scope: IST date derivation, dedupe, OHLC sanity (H≥max(O,C), L≤min(O,C), >0), NaN handling, gap detection against a trading calendar, volume handling, price-basis flag, fingerprint.
 - Components: `data/validation.py`, `data/normalize.py`, `data/calendar.py`.
 - Tasks: [ ] date derivation [ ] dedupe rule (latest `created_at`; log) [ ] OHLC validators [ ] quarantine/raise policy [ ] gap report [ ] NSE trading calendar source [ ] data fingerprint [ ] optional Parquet cache.
-- Dependencies: M2; Q2, Q3.
+- Dependencies: M2; O1, O5, O6.
 - Deliverables: `normalize_bars()` + `DataQualityReport`.
 - Acceptance: the 2 zero-OHLC rows and 66 duplicate pairs are detected and reported; output unique on `(fin_code, trading_date)`; deterministic fingerprint; no silent drops.
 - Tests: duplicates with differing values, zero/NaN/negative prices, unsorted input, ms vs s timestamps, DST-free IST conversion, holiday vs missing day.
@@ -158,6 +161,6 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 
 ## 7. Next Recommended Tasks
 
-1. User answers the remaining questions (Q2 follow-up on corporate actions, Q3–Q8).
-2. Milestone 2, task 1 (proposed first task): scaffold the project (pyproject, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the remote DB read-only (Nifty 50 index plus the seven large caps). No engine work yet.
+1. User confirms open items O1–O7 (at minimum O2 and O3) and says go.
+2. Milestone 2, task 1 (proposed first task): scaffold the project (`requirements.txt`, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the remote DB read-only (Nifty 50 index plus the seven large caps). No engine work yet.
 3. Then Milestone 3 normalization with a deterministic data-quality report.

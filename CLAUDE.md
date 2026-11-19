@@ -19,6 +19,7 @@ This is quantitative research first. We want to know why a strategy works, in wh
 - **Authoritative data source: remote PostgreSQL 15.18, host `34.14.174.6:5432`, database `univest`** (the app's production-style DB; user `postgres`). Credentials come from environment variables only (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`) and must never be written to the repo, docs, or logs. All access is **read-only** (`default_transaction_read_only=on`, set a `statement_timeout`). The table is ~21M rows (691,796 fin_codes); unfiltered aggregates time out, so always filter by `fin_code`. [VERIFIED]
 - A local Homebrew PostgreSQL (`/tmp:5432`, db `postgres`) holds a partial copy with indices only (no equities). Do not use it for backtests. [VERIFIED]
 - Equity price history exists in the remote DB for Nifty 50 names (checked 7 large caps: 2018-01-01 → 2026-09-21; see §3). Prices are **unadjusted**. See ADR-0005 and ADR-0008. [VERIFIED]
+- **Decisions from the user (2026-11-20):** `corporate_actions` is reliable and is the adjustment source; Nifty 50 membership comes from `index_companies_mapping`; **delivery (CNC) only, long-only** for now; Python 3.12 venv + `src/` layout + SQLAlchemy/psycopg approved; normalized bars go into a **new table** (not the source tables); dependencies are tracked in **`requirements.txt`** and must be kept in sync (ADR-0009).
 - Milestone status lives in `docs/PROJECT_PLAN.md`. Do not duplicate it here.
 
 ## 3. Data Facts You Must Not Forget (verified; re-verify if in doubt)
@@ -57,6 +58,7 @@ Accepted/proposed stack (see ADRs for status):
 | Storage | PostgreSQL (existing) | Read-only from the engine. Optional Parquet cache for speed. |
 | Config | YAML/TOML + pydantic or dataclasses; secrets from env | [RECOMMENDATION] |
 | Tests | pytest | |
+| Dependencies | `requirements.txt` (pinned versions) | Update it in the same change that adds/removes/upgrades any package. Keep dev tools in `requirements-dev.txt` if split. |
 | Viz | Plotly | |
 | Dashboard | Streamlit | After MVP. |
 | Broker | Zerodha Kite Connect | Last milestones only. |
@@ -83,6 +85,8 @@ Do not add a dependency without a recorded reason (ADR if non-trivial).
 11. **In-sample results are not evidence.** Never claim a strategy is profitable from in-sample backtests. Use train/test splits, walk-forward, out-of-sample periods, parameter-sensitivity, and multiple-testing awareness. Reports must show the number of parameter combinations tried.
 12. **No real orders in backtests.** Broker adapters are unreachable from backtest code paths.
 
+13. **Scope for now:** delivery (CNC) product only, long-only, cash account. No shorting, margin, or intraday (MIS) logic until a new ADR changes this.
+
 ## 7. Performance Metrics
 
 Required: total return, CAGR, Sharpe, Sortino, max drawdown, win rate, profit factor, average holding period, number of trades, exposure. Plus benchmark-relative metrics.
@@ -102,7 +106,8 @@ Each formula is documented in `docs/ARCHITECTURE.md` (Performance section) with 
 9. DB schema changes require a documented reason and a migration script (`migrations/`), plus an ADR. The engine's DB role must be read-only on source tables. Do not alter `company_master` or `stock_prices_five_years` without explicit user approval.
 10. Secrets (DB passwords, Kite API key/secret/access token) come from environment variables or an untracked `.env`. Never commit them, log them, or print them. `.env` must be in `.gitignore`.
 11. Proposed layout (confirm in ADR-0002 before creating): `src/algo_engine/{data,indicators,strategies,engine,orders,risk,execution,portfolio,analytics,reporting,config}`, `tests/{unit,integration}`, `configs/`, `docs/`, `scripts/`.
-12. Commit messages explain why. Do not commit unless asked.
+12. Dependencies: every new import of a third-party package requires a `requirements.txt` update in the same change, with a pinned version and a reason in the PR/summary. Never leave it stale.
+13. Commit messages explain why. Do not commit unless asked.
 
 ## 9. Testing Requirements
 
