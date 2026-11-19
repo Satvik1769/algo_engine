@@ -1,0 +1,84 @@
+# Decision Log (ADR)
+
+Append-only. Never edit or delete an accepted decision. To change one, add a new ADR and mark the old one `Superseded by ADR-XXXX`.
+
+Statuses: **Accepted** (user approved), **Proposed** (recommended, awaiting user approval), **Superseded**.
+
+Template:
+
+```
+## ADR-NNNN: Title
+- Date:
+- Status:
+- Decision:
+- Context:
+- Alternatives considered:
+- Reason for selection:
+- Trade-offs:
+```
+
+---
+
+## ADR-0001: Custom event-driven backtesting engine
+- Date: 2026-11-20
+- Status: Accepted (stated by user in project brief)
+- Decision: Build a custom event-driven engine that processes bars chronologically and passes events through strategy, order, risk, execution, and portfolio components.
+- Context: The project aims to eventually share the strategy/order/portfolio code with paper trading and live trading. The user wants control over fill realism and look-ahead prevention.
+- Alternatives considered: (a) Vectorized pandas backtests (fast, but fill realism, position state and path-dependent rules are awkward, and live parity is poor); (b) existing frameworks such as backtrader, vectorbt, Zipline-reloaded, bt (mature, but backtrader is poorly maintained, and none match our NSE cost model and live-parity goals without adaptation).
+- Reason for selection: Same code path for backtest/paper/live; explicit control of timing and costs; the research goal values understanding every step.
+- Trade-offs: More code to write and test; slower than vectorized for large parameter sweeps. Mitigation: vectorized indicator precomputation (look-ahead-safe) inside the event loop, and a vectorized fast path later only for screening, validated against the engine.
+
+## ADR-0002: Repository layout and Python version
+- Date: 2026-11-20
+- Status: Proposed
+- Decision: `src/` layout with package `algo_engine`; `tests/` split into `unit/` and `integration/`; `configs/` for YAML run configs; `docs/`. Python 3.12 in a project venv, dependencies in `pyproject.toml`.
+- Context: Repository is empty (README only). PyCharm SDK is Python 3.12, system `python3` is 3.10 and has no pandas.
+- Alternatives considered: flat layout; requirements.txt only; Python 3.13 (installed via Homebrew).
+- Reason for selection: `src/` layout prevents accidental imports of uninstalled code and is standard for packaged projects; 3.12 matches the IDE configuration and is well supported by pandas/NumPy.
+- Trade-offs: Slightly more setup. Decision is cheap to reverse before code exists.
+
+## ADR-0003: Database access via SQLAlchemy Core + psycopg, read-only
+- Date: 2026-11-20
+- Status: Proposed
+- Decision: A `MarketDataProvider` interface with a PostgreSQL implementation using SQLAlchemy Core (text/parameterized SQL) and psycopg 3, returning pandas DataFrames. The connection uses a read-only role/transaction and settings from environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, or a `DATABASE_URL`). Local default is the unix socket `/tmp`, database `postgres`.
+- Context: No existing application code or connection config exists in the repo. The local server uses OS-user auth over a unix socket. The source tables have no keys or indexes.
+- Alternatives considered: raw psycopg only (fewer dependencies, but weaker pooling/URL handling); full ORM (unneeded for read-only analytical queries); pandas `read_sql` with a raw DBAPI connection (deprecated warnings).
+- Reason for selection: Parameterized queries, URL-based config and portability with minimal abstraction.
+- Trade-offs: One extra dependency (SQLAlchemy). The abstraction (`MarketDataProvider`) allows swapping to Parquet or a broker feed without engine changes.
+
+## ADR-0004: Prices are normalized into a clean, validated bar store; raw table stays untouched
+- Date: 2026-11-20
+- Status: Proposed
+- Decision: Never query `stock_prices_five_years` directly from the engine. A data layer reads it, derives `trading_date` (IST date from `updated_time` ms), dedupes on `(fin_code, trading_date)`, validates OHLC, and emits a canonical bar DataFrame. Results may be cached as Parquet (or a new, separately named table, via a documented migration) keyed by a data fingerprint.
+- Context (verified): the table has no PK/unique/index; `updated_time` is epoch ms with era-dependent time-of-day; 66 exact duplicate `(fin_code, updated_time)` pairs and further same-date duplicates; 2 rows with zero O/H/L; `created_at` mixes seconds and ms; locally it holds only 3 index series, not Nifty 50 equities.
+- Alternatives considered: fix the source table in place (violates the no-schema-change rule, and risks other apps using it); query raw data on each run (non-reproducible, slow without indexes).
+- Reason for selection: Safe, reproducible, and keeps source data intact.
+- Trade-offs: Another storage layer to maintain. Duplicate resolution rule (keep latest `created_at`) must be documented and logged.
+- Open dependency: Nifty 50 equity history must be located/loaded. See PROJECT_PLAN Known Issues K1.
+
+## ADR-0005: Price basis (raw vs adjusted) must be established before any equity backtest
+- Date: 2026-11-20
+- Status: Proposed (decision pending user input)
+- Decision: The engine will carry an explicit `price_basis` property (`raw` or `adjusted`) on its data. Backtests on equities must not run on unadjusted data across splits/bonuses. Preferred approach: obtain split/bonus-adjusted OHLC (and dividend-adjusted for signals if desired) and store the adjustment factors; fill/valuation conventions follow the Financial Simulation Rules in CLAUDE.md.
+- Context: No adjustment-factor column exists, `corporate_actions` is empty locally, and the equity price data is not present, so it cannot be verified whether equity prices are adjusted.
+- Alternatives considered: use raw prices and apply corporate actions in the portfolio (most faithful for live parity, but needs reliable action data); use vendor-adjusted prices (simplest, but fills at adjusted prices differ from actual traded prices, so costs, tick rounding and lot checks are slightly wrong); detect splits heuristically from price gaps (fallback only, never primary).
+- Reason: Needs data answers first. Recommendation for the MVP: adjusted prices for both signal and fills, flagged as an approximation in reports.
+- Trade-offs: See alternatives. Pending user answer to question Q2.
+
+## ADR-0006: Execution model defaults for daily bars
+- Date: 2026-11-20
+- Status: Proposed
+- Decision: Signals on bar `t` close → market orders fill at bar `t+1` open ± slippage. Stop/limit semantics and same-bar stop+target ambiguity follow CLAUDE.md §6.3 (pessimistic).
+- Context: Daily OHLC does not reveal the intraday path; same-bar close execution would use information the strategy could not act on.
+- Alternatives considered: fill at signal-bar close (unrealistic; look-ahead-adjacent); fill at next-bar VWAP/close (needs data we lack or lags unrealistically); randomized intrabar path (non-deterministic by default).
+- Reason for selection: Simple, defensible, deterministic.
+- Trade-offs: Open-price fills ignore opening-auction impact; slippage parameter accounts for it. Configurable alternatives can be added through an `ExecutionModel` interface.
+
+## ADR-0007: Plan-level choices for the MVP scope
+- Date: 2026-11-20
+- Status: Proposed
+- Decision: MVP = milestones 1–8 plus a minimal static report (part of 9), single timeframe (daily), multiple symbols supported by data model but with one symbol run first, market and (simple) stop orders only, EMA crossover as the pipeline-validation strategy. Streamlit, optimization, paper trading and Kite are post-MVP.
+- Context: User wants a simple strategy to validate the pipeline and not to over-engineer.
+- Alternatives considered: including the dashboard in MVP; implementing several strategies at once.
+- Reason: Smallest vertical slice that proves correctness.
+- Trade-offs: Visualization arrives later; early results are read from files/notebook output.
