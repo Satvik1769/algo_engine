@@ -180,4 +180,6 @@ See `docs/DECISIONS.md` for the full records. Summary:
 |---|---|
 | Config (`config/settings.py`: `DbSettings` from env, read-only session options) | Implemented |
 | Historical Data Provider (`data/provider.py` interface, `data/postgres_provider.py`) | Implemented: `get_instruments`, `get_index_members` (parsing of `companies` text), `get_raw_bars` (raw, not cleaned) |
+| Data Validation & Normalization (`data/normalize.py`) | Implemented (3a): reject-with-reason, dedupe, calendar, gaps, fingerprint. Bars table (3c) not started |
+| Price adjustment (`data/adjust.py`) | Implemented (3b): event-reconciled split/bonus adjustment, unexplained-jump check. Rights and dividends not price-adjusted |
 | Everything else | Not started |

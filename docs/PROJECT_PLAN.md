@@ -11,7 +11,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 |---|---|---|---|---|
 | 1 | Repository and data infrastructure analysis | P0 | Yes | **Done** (docs only) |
 | 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
-| 3 | Data validation and normalization | P0 | Yes | Not started |
+| 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b done; 3c next) |
 | 4 | Core event-driven engine | P0 | Yes | Not started |
 | 5 | Strategy interface and indicator engine | P0 | Yes | Not started |
 | 6 | Order management and execution simulation | P0 | Yes | Not started |
@@ -44,6 +44,13 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - **K11:** Prices are **unadjusted** (RELIANCE ~₹2,611 in Jan 2024 vs ~₹1,240 in 2026 after the bonus). Corporate actions exist remotely (93,938 rows) but their quality is unverified. Adjustment is required before backtesting (ADR-0005).
 - **K12:** Remote table mixes `stock_type` NSE and BSE; BSE data is noisier. Use NSE only unless NSE is missing. Duplicate rows per date are common (RELIANCE NSE: 1,914 rows for 1,852 dates).
 - **K13:** Remote table is ~21M rows; unfiltered aggregates exceed a 60 s timeout. Always filter by `fin_code`; cache normalized bars locally.
+- **K15 (verified 2026-11-20, `corporate_actions` structure):** `type` and `caption` are empty. Action kind is encoded in `corpact_id`: 76 and 68 = bonus (ratio1 bonus shares per ratio2 held; price factor = ratio2/(ratio1+ratio2); e.g. Reliance 1:1 -> 0.5, BEL 2:1 -> 1/3, Powergrid 1:3 -> 0.75), 90 and 91 = split (ratio1:ratio2 = new face value:old face value; factor = ratio1/ratio2; e.g. Nestle 1:10 -> 0.1), 69 and 78 = rights (ratio1:ratio2 plus `offer_price`; needs a TERP factor, not yet checked), 77 = cash dividend (`amount` per share, `dividend_type`). Other ids (1, 31, 38, 61, 64, 65, 72, 73, 80) are announcements with no ex_date. For the Nifty 50 members, each bonus/split/rights event appears **twice** under two ids, so events must be deduplicated on (fin_code, ex_date, kind, ratios). Dates are varchar; ex_date is `YYYY-MM-DD 00:00:00.000`.
+- **K16 (verified): the price series is only partly adjusted.** Reconciling event factors with price jumps at ex-dates: Bajaj Finserv (2022), BEL (2022), Powergrid (2023), Nestle (2024-01) show no jump (already adjusted by the data vendor). Reliance (2024-10-28, open/prev close 0.499), Wipro (2024-12-03, 0.498) and Shriram Finance (jump 0.233) show the full jump (not adjusted). Applying every action blindly would double-adjust the older ones. Adjustment must be decided per event by comparing the price ratio at the ex-date with the expected factor.
+- **K17 (verified): `ex_date` can be wrong for splits.** Dr Reddy's split shows ex_date 2024-10-25, but prices are still ~6,583 on 2024-10-24 and ~1,200 on 2024-11-28 (about 1:5), so the real ex-date is within 2024-10-25..2024-11-28 and must come from the price series, not the table.
+- **K18 (verified): NSE price history has holes.** Shriram Finance (111218) has only 2 NSE rows between 2024-11-28 and 2025-06-27; Dr Reddy has no NSE rows 2024-11-22..2024-11-27. Missing days cannot be filled by guessing; they must be reported, and symbols with large holes need a policy (exclude those periods, or fill from BSE rows if they validate).
+- **K18 update (2026-11-20):** Measured NSE trading days per year vs the Nifty 50 index: 2018-2023 complete (about 244-252/yr, matching the index); 2024 about 168-175, 2025 about 139 (Shriram 72), 2026 about 54 (index 112) for Reliance/TCS/Shriram. **User will load the missing data.** Until then, the clean backtest window is 2018-2023. After the load, re-run the per-year coverage check, then resume Milestone 3. Ask whether the new rows are raw or adjusted and in the same table/format (`stock_type='NSE'`, ms `updated_time`).
+- **K19 (verified 2026-11-20): NULL `open_price` blocks.** Reliance NSE has 64 rows with NULL open (59 in 2023-07-19..2023-10, 5 in 2024-10) but valid high/low/close/prev close/volume; TCS has 65 and Shriram 64, so it is likely common to all. Next-open fills need the open, so the normalizer rejects these rows (reason `null_price`) and they show up as missing days. This means 2018-2023 is NOT fully clean: about 60 missing days per stock in that window (mostly this block). Options: fix at source (user is adding data), or accept missing days. Do not fill the open with another price.
+- **K20 (verified 2026-11-20): `corporate_actions` is incomplete for recent events.** Price jumps with no matching row: HDFCBANK about 0.499 on 2025-08-26 (1:1 bonus), NESTLEIND about 0.502 on 2025-08-08 (1:1 bonus), KOTAKBANK 0.200 on 2026-01-14 (split). The table has no split/bonus for HDFCBANK, Nestle after 2024-01-04, or Kotak at all; Kotak's last dividend is 2024-07-19. Also ADANIENT 0.711 on 2018-09-06 is unexplained. `find_unexplained_jumps` surfaces these; they must be added to the table (or resolved manually) before using those symbols across those dates. Correction to K17: Dr Reddy's jump is on 2024-10-31 (ratio 0.19), not late November; the listed ex-date 2024-10-25 is still wrong, by 6 days.
 - **K14 (security):** A production-style DB password was pasted in chat. It is not stored in the repo. Recommend rotating it, creating a dedicated read-only role for this project, and restricting the host/IP.
 - **K2:** The source table has no PK/unique constraint/index; duplicates exist: 66 `(fin_code, updated_time)` pairs (identical OHLC) and additional same-IST-date rows with different timestamps (Nifty 50: 2,567 rows vs 2,502 distinct dates).
 - **K3:** No Nifty 50 TRI series available (`indices` empty). Nifty 50 price index exists as fin_code 100256265. Need a TRI source (NSE/niftyindices CSV) or must use price index with an explicit label.
@@ -66,7 +73,7 @@ Open:
 - O3: Initial capital (default proposal: ₹10,00,000, configurable).
 - O4: `.gitignore`: which existing file did you mean? Proposal: create a root `.gitignore` (venv, `.env`, `.idea/`, caches, `data/`) at scaffold time.
 - O5: Member price history shorter than the backtest window (HDFCBANK NSE from 2025-06-18; JIOFIN 2023; ETERNAL 2021): how to treat? Proposal: use BSE rows or other `fin_code` history only if verified; otherwise the symbol enters the universe from its first valid NSE date.
-- O6: Corporate-action details to confirm at M3: which `type` values map to split/bonus/dividend, and whether `ex_date` is reliable (columns are varchar). The user says the table is reliable; M3 will still assert adjusted series against `last_day_close_price`.
+- O6 (investigated, see K15-K17): the table does not fully support blind adjustment. Needs a decision, see ADR-0010 (Proposed) and the questions in chat.
 - O7: Backtest date range (proposal: 2018-01-01 onward, subject to O5), and risk-free rate (proposal: configurable, default e.g. 6.5%/yr).
 
 ## 5. Milestone Details
@@ -93,7 +100,9 @@ Open:
 - Objective: Turn raw rows into trustworthy canonical bars with a quality report.
 - Scope: IST date derivation, dedupe, OHLC sanity (H≥max(O,C), L≤min(O,C), >0), NaN handling, gap detection against a trading calendar, volume handling, price-basis flag, fingerprint.
 - Components: `data/validation.py`, `data/normalize.py`, `data/calendar.py`.
-- Tasks: [ ] date derivation [ ] dedupe rule (latest `created_at`; log) [ ] OHLC validators [ ] quarantine/raise policy [ ] gap report [ ] NSE trading calendar source [ ] data fingerprint [ ] optional Parquet cache.
+- Step 3a (DONE 2026-11-20): [x] date derivation (provider, IST) [x] OHLC validators [x] reject-with-reason policy [x] dedupe (latest `created_at`, seconds/ms normalized, bad rows cannot win) [x] calendar from the Nifty 50 index days [x] gap report [x] data fingerprint. Code: `data/normalize.py`; tests: `tests/unit/test_normalize.py` (11).
+- Step 3b (DONE 2026-11-20): [x] `get_corporate_actions` in the provider [x] `data/adjust.py`: `build_events` (dedupe across ids, combine same-day events), `adjust_bars` (event reconciliation per ADR-0010, short-gap matching, no "already adjusted" verdict when a gap hides the window), `find_unexplained_jumps` [x] 13 unit tests. Real-data result for the Nifty 50 (2018-2026-09): 9 split/bonus events found; 2 applied (Reliance, Dr Reddy), 5 already adjusted by the vendor (BEL, Nestle 2024, Powergrid, Bajaj Finserv x2), 2 ambiguous because of long gaps (Wipro, Shriram). Not done: rights issues, dividends (kept as events for the portfolio), cross-check vs `last_day_close_price`.
+- Step 3c: [ ] new `algo` schema bars table in local PostgreSQL + migration script + load/refresh command [ ] optional Parquet cache.
 - Dependencies: M2; O1, O5, O6.
 - Deliverables: `normalize_bars()` + `DataQualityReport`.
 - Acceptance: the 2 zero-OHLC rows and 66 duplicate pairs are detected and reported; output unique on `(fin_code, trading_date)`; deterministic fingerprint; no silent drops.
@@ -157,12 +166,15 @@ Open:
 
 ## 6. Completed Tasks
 
+- 2026-11-20: Milestone 3a. `data/normalize.py` (normalize_bars, DataQualityReport, build_calendar, find_missing_dates, bars_fingerprint), 11 new unit tests, 23 unit tests total pass. Real-data run (index + Reliance, TCS, Shriram, 2018-2026-09): index rows_in 2156 -> out 2071 (7 rejected, 78 duplicates removed); stocks rows_in 5650 -> out 5297 (202 rejected: 193 null open, 9 inconsistent OHLC; 151 duplicates removed; 3 conflicting duplicate dates). Fingerprint independent of row order.
 - 2026-11-20: Milestone 2. Files: `src/algo_engine/config/settings.py`, `data/provider.py`, `data/postgres_provider.py`; tests `tests/unit/` (12) and `tests/integration/` (5, live, skipped without credentials). All 17 passed. Raw bars query filters by fin_code + IST date, NSE default, cast to float, ordered, undeduplicated. Index members parsed from `index_companies_mapping`. Writes rejected (verified by test). Remote queries are fast with the fin_code index.
 - 2026-11-20: Repository and database inspection (read-only); four documentation files created. No application code or DB changes.
 
 ## 7. Next Recommended Tasks
 
-1. Milestone 3: IST `trading_date`, dedupe (NSE only), OHLC validation, `DataQualityReport`, corporate-action adjustment from `corporate_actions` (first inspect its `type`/`ex_date` values and assert adjusted series against `last_day_close_price`), trading calendar from the data itself (the union of Nifty 50 index and member dates), new `algo` schema table for bars (O2, needs user OK), data fingerprint.
+0. Milestone 3 is paused until the user loads the missing 2024+ data (K18) and decides the decision on ADR-0010 (adjustment approach) and the data-gap policy (K18).
+1. Milestone 3c: bars table. Also decide how to treat K20 (missing recent actions) and the ambiguous events (Wipro, Shriram).
+2. (old text) corporate-action adjustment from `corporate_actions` (first inspect its `type`/`ex_date` values and assert adjusted series against `last_day_close_price`), trading calendar from the data itself (the union of Nifty 50 index and member dates), new `algo` schema table for bars (O2, needs user OK), data fingerprint.
 2. User: confirm O2 (bars table location), O3 (capital), O5, O7.
 2. Milestone 2, task 1 (proposed first task): scaffold the project (`requirements.txt`, venv on Python 3.12, `.gitignore`, pytest) and implement a read-only `PostgresMarketDataProvider` with `get_raw_bars` and `get_instruments`, tested against the remote DB read-only (Nifty 50 index plus the seven large caps). No engine work yet.
 3. Then Milestone 3 normalization with a deterministic data-quality report.
