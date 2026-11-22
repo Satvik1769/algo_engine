@@ -11,7 +11,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 |---|---|---|---|---|
 | 1 | Repository and data infrastructure analysis | P0 | Yes | **Done** (docs only) |
 | 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
-| 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b done; 3c next) |
+| 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b, 3c done; Parquet cache and open data decisions remain) |
 | 4 | Core event-driven engine | P0 | Yes | Not started |
 | 5 | Strategy interface and indicator engine | P0 | Yes | Not started |
 | 6 | Order management and execution simulation | P0 | Yes | Not started |
@@ -102,7 +102,7 @@ Open:
 - Components: `data/validation.py`, `data/normalize.py`, `data/calendar.py`.
 - Step 3a (DONE 2026-11-20): [x] date derivation (provider, IST) [x] OHLC validators [x] reject-with-reason policy [x] dedupe (latest `created_at`, seconds/ms normalized, bad rows cannot win) [x] calendar from the Nifty 50 index days [x] gap report [x] data fingerprint. Code: `data/normalize.py`; tests: `tests/unit/test_normalize.py` (11).
 - Step 3b (DONE 2026-11-20): [x] `get_corporate_actions` in the provider [x] `data/adjust.py`: `build_events` (dedupe across ids, combine same-day events), `adjust_bars` (event reconciliation per ADR-0010, short-gap matching, no "already adjusted" verdict when a gap hides the window), `find_unexplained_jumps` [x] 13 unit tests. Real-data result for the Nifty 50 (2018-2026-09): 9 split/bonus events found; 2 applied (Reliance, Dr Reddy), 5 already adjusted by the vendor (BEL, Nestle 2024, Powergrid, Bajaj Finserv x2), 2 ambiguous because of long gaps (Wipro, Shriram). Not done: rights issues, dividends (kept as events for the portfolio), cross-check vs `last_day_close_price`.
-- Step 3c: [ ] new `algo` schema bars table in local PostgreSQL + migration script + load/refresh command [ ] optional Parquet cache.
+- Step 3c (DONE 2026-11-23): [x] `algo` schema in local PostgreSQL (O2 as proposed): tables `bars` (adjusted OHLCV + `adj_factor`, PK `(fin_code, trading_date)`, OHLC CHECKs), `load_runs` (fingerprint, quality JSON), `adjustment_events`, `rejected_rows` [x] idempotent migration `data/migrations/001_create_bars.sql` [x] `data/store.py` (`BarStore`: migrate, `replace_bars` in one transaction, `read_bars`, `latest_run`) [x] `data/pipeline.py` (`load_bars`) and CLI `python -m algo_engine.data.load` (refuses to run if the store points at the source DB) [x] settings `StoreSettings` (`ALGO_PG*`, `ALGO_SCHEMA`) [x] 5 integration tests (throwaway schema `algo_test`) + 2 unit tests. Refresh replaces ALL stored bars of the symbols (adjustment depends on full history). First real load (run 1, Nifty 50 + index, 2018-01-01..2026-09-21): 84,554 bars, 3,174 adjusted; 2,779 rows rejected (2,697 null price), 2,523 duplicates removed, 12,843 missing symbol-days; events: 2 applied, 5 already adjusted, 2 ambiguous (gap); 4 unexplained jumps to review. [ ] optional Parquet cache (not built, no consumer yet).
 - Dependencies: M2; O1, O5, O6.
 - Deliverables: `normalize_bars()` + `DataQualityReport`.
 - Acceptance: the 2 zero-OHLC rows and 66 duplicate pairs are detected and reported; output unique on `(fin_code, trading_date)`; deterministic fingerprint; no silent drops.

@@ -32,3 +32,15 @@ def test_connection_is_read_only_with_timeout():
 
 def test_url_uses_psycopg_driver():
     assert DbSettings.from_env(ENV).url().drivername == "postgresql+psycopg"
+
+
+def test_store_settings_defaults_to_local_socket():
+    from algo_engine.config.settings import StoreSettings
+    s = StoreSettings.from_env({})
+    assert (s.host, s.port, s.database, s.schema) == ("/tmp", 5432, "postgres", "algo")
+
+
+def test_store_settings_rejects_unsafe_schema_name():
+    from algo_engine.config.settings import StoreSettings
+    with pytest.raises(ConfigError):
+        StoreSettings.from_env({"ALGO_SCHEMA": "algo; DROP TABLE x"})

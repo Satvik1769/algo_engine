@@ -1,7 +1,9 @@
 """Database settings, read from environment variables (optionally seeded from an untracked .env). Secrets are never stored in code."""
 from __future__ import annotations
 
+import getpass
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -65,3 +67,48 @@ class DbSettings:
                 f"-c statement_timeout={self.statement_timeout_ms}"
             ),
         }
+
+
+_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+@dataclass(frozen=True)
+class StoreSettings:
+    """Where the normalized bars table lives (local PostgreSQL by default, read-write).
+
+    Separate from `DbSettings`, which is the read-only market-data source. Variables: ALGO_PGHOST
+    (default `/tmp`, the local unix socket), ALGO_PGPORT, ALGO_PGDATABASE (default `postgres`),
+    ALGO_PGUSER (default: OS user), ALGO_PGPASSWORD (optional), ALGO_SCHEMA (default `algo`).
+    """
+    host: str = "/tmp"
+    port: int = 5432
+    database: str = "postgres"
+    user: str = field(default_factory=getpass.getuser)
+    password: str | None = field(default=None, repr=False)
+    schema: str = "algo"
+
+    def __post_init__(self) -> None:
+        if not _IDENT.match(self.schema):
+            raise ConfigError(f"ALGO_SCHEMA must match {_IDENT.pattern}: {self.schema!r}")
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> StoreSettings:
+        if env is None:
+            load_dotenv(override=False)
+            env = os.environ
+        try:
+            port = int(env.get("ALGO_PGPORT", "5432"))
+        except ValueError as exc:
+            raise ConfigError(f"ALGO_PGPORT must be an integer: {exc}") from exc
+        return cls(
+            host=env.get("ALGO_PGHOST", "/tmp"),
+            port=port,
+            database=env.get("ALGO_PGDATABASE", "postgres"),
+            user=env.get("ALGO_PGUSER") or getpass.getuser(),
+            password=env.get("ALGO_PGPASSWORD") or None,
+            schema=env.get("ALGO_SCHEMA", "algo"),
+        )
+
+    def url(self) -> URL:
+        return URL.create("postgresql+psycopg", username=self.user, password=self.password,
+                          host=self.host, port=self.port, database=self.database)
