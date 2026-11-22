@@ -13,7 +13,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
 | 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b, 3c done; Parquet cache and open data decisions remain) |
 | 4 | Core event-driven engine | P0 | Yes | Not started |
-| 5 | Strategy interface and indicator engine | P0 | Yes | Not started |
+| 5 | Strategy interface and indicator engine | P0 | Yes | In progress (code and tests done; runs end to end only after M4) |
 | 6 | Order management and execution simulation | P0 | Yes | Not started |
 | 7 | Portfolio management | P0 | Yes | Not started |
 | 8 | Performance analytics | P0 | Yes | Not started |
@@ -122,7 +122,7 @@ Open:
 ### Milestone 5: Strategy interface and indicator engine
 - Objective: Plug-in strategies and causal indicators.
 - Scope: `Strategy` ABC, `Signal`, param validation, strategy registry, indicators EMA, SMA, RSI, ATR, Bollinger, rolling returns (add as needed per strategy).
-- Tasks: [ ] interface [ ] registry/config loading [ ] indicators with tests vs hand values [ ] causality tests [ ] EMA crossover strategy.
+- Tasks: [x] interface (`strategy/base.py`: `Strategy`, `Signal`, `Bar`, `StrategyParams`, `HistoryView`/`PortfolioView` protocols) [x] registry/config loading (`strategy/registry.py`, `create_strategy({name, params})`) [x] indicators vs hand values (`indicators/core.py`: SMA, SMA-seeded EMA, Wilder RSI/ATR, Bollinger with population std, rolling returns; conventions in the module docstring) [x] causality tests (every indicator, plus a strategy truncation test and a test that a cheating strategy is flagged) [x] EMA crossover (`strategy/ema_crossover.py`, incremental, long-only). 35 tests, using a stub harness `tests/unit/_harness.py`. Open: run it through the real engine once M4 exists; `HistoryView`/`PortfolioView` are minimal and will be extended by M4/M7.
 - Dependencies: M4 (parallel). Deliverables: EMA crossover running end to end.
 - Acceptance: new strategy added with no engine edits; indicators match reference computations; warm-up handled explicitly (no signals before enough history).
 - Tests: indicator unit tests, warm-up, causality, param validation, signal on exact crossover bar.
@@ -171,6 +171,8 @@ Open:
 - 2026-11-20: Repository and database inspection (read-only); four documentation files created. No application code or DB changes.
 
 ## 7. Next Recommended Tasks
+
+(2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 
 0. Milestone 3 is paused until the user loads the missing 2024+ data (K18) and decides the decision on ADR-0010 (adjustment approach) and the data-gap policy (K18).
 1. Milestone 3c: bars table. Also decide how to treat K20 (missing recent actions) and the ambiguous events (Wipro, Shriram).
