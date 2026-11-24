@@ -17,7 +17,7 @@ from algo_engine.engine import (
 )
 from algo_engine.engine.history import SymbolSeries, TruncatedHistory
 from algo_engine.engine.ports import (
-    CashOnlyPortfolio, Fill, Order, RiskDecision,
+    CashOnlyPortfolio, ExecutionReport, Fill, Order, RiskDecision, SizingResult,
 )
 from algo_engine.strategy import (
     Action, Bar, ParamError, Signal, Strategy, StrategyContext, StrategyParams, register_strategy,
@@ -95,12 +95,12 @@ class BuyOneManager:
     def __init__(self) -> None:
         self.next_id = 1
 
-    def create_orders(self, signals, portfolio, trading_date):
+    def create_orders(self, signals, account, bars, trading_date):
         orders = []
         for s in signals:
             orders.append(Order(self.next_id, s.fin_code, Side.BUY, 1, trading_date, s.strategy_id))
             self.next_id += 1
-        return orders
+        return SizingResult(orders)
 
 
 class OpenFillExecutor:
@@ -109,13 +109,13 @@ class OpenFillExecutor:
     def __init__(self) -> None:
         self.offers: list[tuple[date, int]] = []
 
-    def execute(self, orders: Sequence[Order], bars: Mapping[int, Bar], trading_date: date):
+    def execute(self, orders: Sequence[Order], bars: Mapping[int, Bar], trading_date: date, account=None):
         fills = []
         for o in orders:
             self.offers.append((trading_date, o.order_id))
             if o.fin_code in bars:
                 fills.append(Fill(o.order_id, o.fin_code, o.side, o.quantity, bars[o.fin_code].open, trading_date))
-        return fills
+        return ExecutionReport(fills)
 
 
 class RecordingPortfolio(CashOnlyPortfolio):
@@ -292,8 +292,8 @@ def test_unfilled_day_order_expires():
     bars = make_bars([10, 11, 12, 13])
 
     class NeverFills:
-        def execute(self, orders, bars, trading_date):
-            return []
+        def execute(self, orders, bars, trading_date, account):
+            return ExecutionReport()
 
     res = run_backtest(_scripted(bars, 0), bars, order_manager=BuyOneManager(), executor=NeverFills())
     statuses = [e.status for e in res.events if isinstance(e, OrderEvent)]
@@ -304,7 +304,7 @@ def test_risk_rejection_is_logged_and_order_never_offered():
     bars = make_bars([10, 11, 12])
 
     class RejectAll:
-        def validate(self, order, portfolio, bar):
+        def validate(self, order, account, bar):
             return RiskDecision(False, "insufficient cash")
 
     ex = OpenFillExecutor()
@@ -325,8 +325,8 @@ def test_bad_fills_raise(make_fill):
     bars = make_bars([10, 11, 12])
 
     class BadExecutor:
-        def execute(self, orders, bars, trading_date):
-            return [make_fill(orders[0], trading_date)]
+        def execute(self, orders, bars, trading_date, account):
+            return ExecutionReport([make_fill(orders[0], trading_date)])
 
     with pytest.raises(ExecutionError):
         run_backtest(_scripted(bars, 0), bars, order_manager=BuyOneManager(), executor=BadExecutor(),
@@ -337,8 +337,8 @@ def test_order_manager_cannot_backdate_or_use_a_symbol_without_a_bar():
     bars = make_bars([10, 11, 12])
 
     class Backdated:
-        def create_orders(self, signals, portfolio, trading_date):
-            return [Order(1, 1, Side.BUY, 1, date(2000, 1, 1), "x")]
+        def create_orders(self, signals, account, bars, trading_date):
+            return SizingResult([Order(1, 1, Side.BUY, 1, date(2000, 1, 1), "x")])
 
     with pytest.raises(ExecutionError):
         run_backtest(_scripted(bars, 0), bars, order_manager=Backdated())

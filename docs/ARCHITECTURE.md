@@ -98,7 +98,7 @@ Defined in CLAUDE.md §6.3 and ADR-0006. Summary: market → next open ± slippa
 
 ### Cost model (target; rates configurable with effective dates)
 
-Per fill: brokerage, STT (on delivery both sides / intraday sell side), exchange transaction charge, SEBI turnover fee, stamp duty (buy), GST on brokerage + fees, plus slippage (bps of price, optionally volume/ATR-based). **Exact current NSE/Zerodha rates must be sourced and recorded in the config when implemented; they are not hardcoded in this document** [ASSUMPTION: delivery equity, CNC product first].
+Per fill: brokerage, STT (on delivery both sides / intraday sell side), exchange transaction charge, SEBI turnover fee, stamp duty (buy), GST on brokerage + fees, plus slippage (bps of price, optionally volume/ATR-based). **Exact current NSE/Zerodha rates must be sourced and recorded in the config when implemented; they are not hardcoded in this document** [ASSUMPTION: delivery equity, CNC product first]. Implemented in M6 (ADR-0012): `engine/params.py` `CostSchedule` (dated, with its source recorded), `execution/costs.py` (formulas in its docstring), `execution/slippage.py`, `execution/simulator.py` (fill rules), `orders/manager.py` (sizing), `risk/manager.py`, `engine/orderbook.py` (state machine). Known gaps: DP charge (K21), historical rates (K22), execution simplifications (K23).
 
 ## 6. Portfolio Lifecycle
 

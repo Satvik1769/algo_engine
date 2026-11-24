@@ -27,6 +27,9 @@ def write_run(base_dir: Path, result: RunResult) -> Path:
         "events": len(result.events),
         "signals": len(result.signals),
         "seed": result.config.seed,
+        "slippage_bps": result.config.slippage_bps,
+        "cost_schedules": [c.effective_from.isoformat() for c in result.config.costs],
+        "zero_cost_diagnostic": all(c.is_zero_cost for c in result.config.costs),
     }
     (out / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n",
                                        encoding="utf-8", newline="\n")

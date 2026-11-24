@@ -1,7 +1,7 @@
 # Project Plan
 
-Last updated: 2026-11-23 (M4 loop built).
-**Current phase: M4 loop done with stub order/risk/execution/portfolio. Next: M6 and M7 minimal versions behind the M4 ports, then run EMA crossover end to end. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
+Last updated: 2026-11-23 (M6 components built).
+**Current phase: M4 loop and M6 components done; the portfolio is still a stub. Next: M7 (portfolio), then run EMA crossover end to end. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -14,7 +14,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b, 3c done; Parquet cache and open data decisions remain) |
 | 4 | Core event-driven engine | P0 | Yes | **Done** (2026-11-23; runs with stub orders/execution/portfolio until M6/M7) |
 | 5 | Strategy interface and indicator engine | P0 | Yes | In progress (code and tests done; runs end to end only after M4) |
-| 6 | Order management and execution simulation | P0 | Yes | Not started |
+| 6 | Order management and execution simulation | P0 | Yes | **Done** (2026-11-23; tested with a test ledger, runs end to end after M7) |
 | 7 | Portfolio management | P0 | Yes | Not started |
 | 8 | Performance analytics | P0 | Yes | Not started |
 | 9 | Reports and dashboard | P1 | Minimal static report only | Not started |
@@ -61,6 +61,10 @@ Suggested order: build 4–8 as one thin vertical slice early (a dummy always-in
 - **K8:** No survivorship-safe Nifty 50 membership history. Current constituents only [ASSUMPTION: list must be provided or fetched].
 - **K9:** No `.gitignore`, no dependency file, no venv. `.idea/` is untracked state in the repo directory. The only commit is "Initial commit".
 - **K10:** `company_master` is large (939,667 rows, mostly derivatives); equity filter is `segment='E' AND instrument_type IS NULL AND NOT deleted` (21,758 rows). Filtering must use explicit `fin_code` lists for the Nifty 50.
+
+- **K21 (2026-11-23): DP charge on sells is not in the default cost schedule.** zerodha.com/charges (fetched 2026-11-23) gave brokerage 0, STT 0.1% both sides, NSE transaction 0.00307%, SEBI Rs 10/crore, stamp 0.015% buy, GST 18% on brokerage+SEBI+transaction. The page text we could read did not show the DP charge, so `dp_charge_per_sell` defaults to 0 (config field, GST included). Costs are understated by that flat amount per sell.
+- **K22 (2026-11-23): current charge rates are applied to 2018-2026.** Rates changed over time (stamp duty, exchange charges). The config accepts dated schedules; only the current one is filled in. Results carry this approximation.
+- **K23 (2026-11-23): execution simplifications.** Sale proceeds are usable the same day (no T+1), no volume cap or partial fills, no circuit-limit modelling, no tick rounding on adjusted prices.
 
 ## 4. Questions
 
@@ -133,6 +137,7 @@ Open:
 - Objective: Orders with state machine; realistic fills with cost and slippage.
 - Scope: MARKET orders, simple STOP; DAY validity; cost model; slippage; risk checks (cash, max position %, max open positions, lot/tick rounding).
 - Tasks: [ ] Order/State machine [ ] signal→order sizing policy [ ] risk manager [ ] execution model [ ] cost model (rates in config) [ ] slippage model.
+- Built (DONE 2026-11-23, ADR-0012): [x] order state machine (`engine/orderbook.py`, illegal transitions raise, terminal states final) [x] sizing (`orders/manager.py`: entry = floor(min(position_pct*equity, cash) / (close*(1+reserve_pct))), exit sells the whole position, unactionable signals logged as `SignalSkippedEvent`) [x] risk (`risk/manager.py`: cash with buffer and same-day commitments, max position %, max open positions, sells within the position; every rejection has a reason) [x] execution (`execution/simulator.py`: market at next open, STOP with gap-through at the open, sells before buys, cash re-checked at fill and refused rather than overdrawn) [x] costs (`execution/costs.py` + `CostSchedule` in `engine/params.py`, dated schedules, per-fill breakdown logged in `FillEvent`) [x] slippage (`FixedBpsSlippage`, default 5 bps, also applied to triggered stops) [x] config sections `sizing`, `risk`, `costs`, `slippage_bps`; `build_components(config)` in `engine/build.py` [x] 49 tests in `tests/unit/test_m6.py` (hand-calculated costs, stop semantics, state machine, a wired run with a test ledger that checks cash never negative, fills after signals, cost and cash reconciliation, byte-identical reruns). Not done: automatic stop placement (`stop_loss_pct`), tick rounding (skipped on purpose, prices are adjusted), volume cap, T+1 settlement, partial fills. `run_backtest` still defaults to no-op stubs because the stub portfolio cannot apply fills; pass `build_components(config)` once M7 exists, then make it the default.
 - Dependencies: M4, M5, K-data on tick/lot. Acceptance: signal at `t` never fills before `t+1`; costs reconcile; rejected orders logged with reason.
 - Tests: gap-through stop, stop & target same bar, insufficient cash, zero quantity, cost breakdown against hand calc, order state transitions.
 - Risks: wrong STT/charge rates; limit-price semantics; unfillable orders at limit-up/down (circuit) not modeled.
@@ -173,7 +178,7 @@ Open:
 
 ## 7. Next Recommended Tasks
 
-(2026-11-23, after M4) 1. M6/M7 minimal versions behind `engine/ports.py`: order state machine and sizing, cash risk check, next-open execution with costs and slippage, avg-cost portfolio with reconciliation; then run EMA crossover on the index. 2. Fix `Order`/`Fill` fields as M6 needs (stop price, time in force). 3. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 4. O3 capital default stays 1,000,000 unless you change it.
+(2026-11-23, after M6) 1. M7: avg-cost portfolio implementing `Portfolio` (`cash`, `equity`, `open_positions`, `apply_fill`, `mark_to_market`) with reconciliation and property tests; make `build_components` the default in `run_backtest`/CLI; run EMA crossover on the index and check by hand. 2. Cost follow-ups: confirm the DP charge on sells (K21) and decide whether to add historical schedules (K22). 3. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 4. O3 capital default stays 1,000,000 unless you change it.
 
 (2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 

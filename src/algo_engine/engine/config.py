@@ -10,6 +10,7 @@ Example (configs/ema_crossover_nifty50.yaml):
     strategy:
       name: ema_crossover
       params: {fast: 12, slow: 26}
+    # optional, with defaults (see engine/params.py): sizing, risk, costs (list of dated schedules), slippage_bps
 
 The snapshot (`to_dict`) is written to the run directory and hashed into the run id.
 """
@@ -19,31 +20,22 @@ import copy
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from algo_engine.config.settings import ConfigError
+from algo_engine.engine.params import (
+    DEFAULT_COST_SCHEDULE, CostSchedule, RiskParams, SizingParams, as_date,
+)
 from algo_engine.strategy import create_strategy
 
-_ALLOWED_KEYS = {"symbols", "start", "end", "strategy", "initial_capital", "seed", "price_basis"}
+_ALLOWED_KEYS = {"symbols", "start", "end", "strategy", "initial_capital", "seed", "price_basis",
+                 "sizing", "risk", "costs", "slippage_bps"}
 _REQUIRED_KEYS = {"symbols", "start", "end", "strategy"}
 _PRICE_BASES = ("adjusted",)  # the bar store holds corporate-action adjusted prices only (ADR-0010)
-
-
-def _as_date(value: Any, key: str) -> date:
-    if isinstance(value, datetime):
-        raise ConfigError(f"{key} must be a date (YYYY-MM-DD), got a datetime: {value!r}")
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value)
-        except ValueError as exc:
-            raise ConfigError(f"{key} must be YYYY-MM-DD, got {value!r}") from exc
-    raise ConfigError(f"{key} must be a date (YYYY-MM-DD), got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -55,6 +47,10 @@ class RunConfig:
     initial_capital: float = 1_000_000.0
     seed: int = 0
     price_basis: str = "adjusted"
+    sizing: SizingParams = field(default_factory=SizingParams)
+    risk: RiskParams = field(default_factory=RiskParams)
+    costs: tuple[CostSchedule, ...] = (DEFAULT_COST_SCHEDULE,)
+    slippage_bps: float = 5.0
 
     def __post_init__(self) -> None:
         symbols = tuple(self.symbols)
@@ -76,6 +72,21 @@ class RunConfig:
             raise ConfigError(f"seed must be an integer, got {self.seed!r}")
         if self.price_basis not in _PRICE_BASES:
             raise ConfigError(f"price_basis must be one of {_PRICE_BASES}, got {self.price_basis!r}")
+        costs = tuple(self.costs)
+        if not costs:
+            raise ConfigError("costs must contain at least one schedule")
+        dates = [c.effective_from for c in costs]
+        if len(set(dates)) != len(dates):
+            raise ConfigError("costs schedules must have distinct effective_from dates")
+        if min(dates) > self.start:
+            raise ConfigError(f"No cost schedule is effective on the start date {self.start} "
+                              f"(earliest effective_from is {min(dates)})")
+        object.__setattr__(self, "costs", tuple(sorted(costs, key=lambda c: c.effective_from)))
+        bps = self.slippage_bps
+        if isinstance(bps, bool) or not isinstance(bps, (int, float)) or not math.isfinite(bps) \
+                or bps < 0 or bps > 1000:
+            raise ConfigError(f"slippage_bps must be between 0 and 1000, got {bps!r}")
+        object.__setattr__(self, "slippage_bps", float(bps))
         # Fail early on unknown strategies or bad parameters (raises ParamError).
         create_strategy(copy.deepcopy(self.strategy))
 
@@ -94,13 +105,21 @@ class RunConfig:
             raise ConfigError(f"symbols must be a list, got {symbols!r}")
         kwargs: dict[str, Any] = {
             "symbols": tuple(symbols),
-            "start": _as_date(raw["start"], "start"),
-            "end": _as_date(raw["end"], "end"),
+            "start": as_date(raw["start"], "start"),
+            "end": as_date(raw["end"], "end"),
             "strategy": copy.deepcopy(raw["strategy"]),
         }
-        for key in ("initial_capital", "seed", "price_basis"):
+        for key in ("initial_capital", "seed", "price_basis", "slippage_bps"):
             if key in raw:
                 kwargs[key] = raw[key]
+        if "sizing" in raw:
+            kwargs["sizing"] = SizingParams.from_dict(raw["sizing"])
+        if "risk" in raw:
+            kwargs["risk"] = RiskParams.from_dict(raw["risk"])
+        if "costs" in raw:
+            if not isinstance(raw["costs"], (list, tuple)):
+                raise ConfigError(f"costs must be a list of schedules, got {raw['costs']!r}")
+            kwargs["costs"] = tuple(CostSchedule.from_dict(c) for c in raw["costs"])
         return cls(**kwargs)
 
     @classmethod
@@ -121,6 +140,11 @@ class RunConfig:
             "initial_capital": self.initial_capital,
             "seed": self.seed,
             "price_basis": self.price_basis,
+            "sizing": {"position_pct": self.sizing.position_pct, "reserve_pct": self.sizing.reserve_pct},
+            "risk": {"cash_buffer_pct": self.risk.cash_buffer_pct, "max_position_pct": self.risk.max_position_pct,
+                     "max_open_positions": self.risk.max_open_positions},
+            "costs": [c.to_dict() for c in self.costs],
+            "slippage_bps": self.slippage_bps,
         }
 
     def snapshot_json(self) -> str:

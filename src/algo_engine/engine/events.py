@@ -17,6 +17,11 @@ class Side(str, Enum):
     SELL = "sell"
 
 
+class OrderType(str, Enum):
+    MARKET = "market"
+    STOP = "stop"
+
+
 class OrderStatus(str, Enum):
     CREATED = "created"
     ACCEPTED = "accepted"
@@ -81,6 +86,15 @@ class FillEvent(Event):
     quantity: int
     price: float
     costs: float
+    cost_breakdown: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SignalSkippedEvent(Event):
+    """A signal that produced no order (already long, no position to sell, quantity rounds to zero)."""
+    fin_code: int
+    action: str
+    reason: str
 
 
 @dataclass(frozen=True)

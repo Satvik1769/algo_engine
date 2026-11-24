@@ -6,6 +6,7 @@ For each date `t` of the union calendar, in this fixed order:
   2. Close phase: a MarketEvent per bar, then the portfolio is marked to market at the close of `t`.
   3. The strategy sees bar `t`, history up to `t`, and a read-only portfolio, and returns signals.
   4. The order manager turns signals into orders, risk validates them, accepted orders wait for `t+1`.
+Every order moves through the `OrderBook` state machine; an illegal transition raises.
 
 The loop owns the ordering. Components never call each other. An order created at `t` can only reach the
 executor in a later iteration, and the loop raises if a component breaks that rule.
@@ -28,12 +29,13 @@ from algo_engine.engine.config import RunConfig
 from algo_engine.engine.errors import BarDataError, ExecutionError, SignalError
 from algo_engine.engine.events import (
     DataQualityEvent, Event, EventLog, EventSink, FillEvent, MarketEvent, OrderEvent, OrderStatus,
-    PortfolioUpdateEvent, RiskRejectionEvent, SignalEvent,
+    PortfolioUpdateEvent, RiskRejectionEvent, SignalEvent, SignalSkippedEvent,
 )
 from algo_engine.engine.history import SymbolSeries, TruncatedHistory
+from algo_engine.engine.orderbook import OrderBook
 from algo_engine.engine.ports import (
-    AcceptAllRisk, CashOnlyPortfolio, EquityPoint, ExecutionSimulator, NoFillExecution, NoOpOrderManager,
-    Order, OrderManager, Portfolio, RiskManager,
+    AcceptAllRisk, AccountView, CashOnlyPortfolio, EquityPoint, ExecutionSimulator, NoFillExecution,
+    NoOpOrderManager, Order, OrderManager, Portfolio, RiskManager,
 )
 from algo_engine.strategy import Bar, PortfolioView, Signal, StrategyContext, create_strategy
 
@@ -61,6 +63,25 @@ class _ReadOnlyPortfolio:
 
     def position_qty(self, fin_code: int) -> int:
         return self._portfolio.position_qty(fin_code)
+
+
+class _ReadOnlyAccount:
+    """What order management, risk and the executor get: account state, no way to change it."""
+
+    def __init__(self, portfolio: Portfolio) -> None:
+        self._portfolio = portfolio
+
+    def position_qty(self, fin_code: int) -> int:
+        return self._portfolio.position_qty(fin_code)
+
+    def cash(self) -> float:
+        return self._portfolio.cash()
+
+    def equity(self) -> float:
+        return self._portfolio.equity()
+
+    def open_positions(self) -> int:
+        return self._portfolio.open_positions()
 
 
 def prepare_bars(config: RunConfig, bars: pd.DataFrame) -> pd.DataFrame:
@@ -146,6 +167,12 @@ def run_backtest(
     strategy = create_strategy(config.strategy)
     strategy.on_start(StrategyContext(tuple(sorted(config.symbols))))
     strategy_view = _ReadOnlyPortfolio(portfolio)
+    account = _ReadOnlyAccount(portfolio)
+    book = OrderBook()
+
+    def transition(order: Order, status: OrderStatus, t: date, reason: str = "") -> None:
+        book.transition(order.order_id, status)
+        emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity, status, reason))
 
     pending: list[Order] = []
     last_close: dict[int, float] = {}
@@ -159,7 +186,7 @@ def run_backtest(
         # 1. Open phase
         if pending:
             due, pending = pending, []
-            _open_phase(t, due, today, executor, portfolio, emit)
+            _open_phase(t, due, today, executor, portfolio, account, emit, transition)
 
         # 2. Close phase
         for code in sorted(today):
@@ -186,21 +213,24 @@ def run_backtest(
 
         # 4. Orders and risk
         if signals:
-            for order in order_manager.create_orders(signals, strategy_view, t):
+            sizing = order_manager.create_orders(signals, account, today, t)
+            for skipped in sizing.skipped:
+                sig = skipped.signal
+                emit(SignalSkippedEvent(t, sig.fin_code, sig.action.value, skipped.reason))
+            for order in sizing.orders:
                 if order.created_on != t:
                     raise ExecutionError(f"Order {order.order_id} created_on {order.created_on}, expected {t}")
                 if order.fin_code not in today:
                     raise ExecutionError(f"Order {order.order_id} is for symbol {order.fin_code} with no bar on {t}")
+                book.register(order)
                 emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity, OrderStatus.CREATED))
-                decision = risk_manager.validate(order, strategy_view, today[order.fin_code])
+                decision = risk_manager.validate(order, account, today[order.fin_code])
                 if decision.accepted:
+                    transition(order, OrderStatus.ACCEPTED, t)
                     pending.append(order)
-                    emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity,
-                                    OrderStatus.ACCEPTED))
                 else:
                     emit(RiskRejectionEvent(t, order.order_id, order.fin_code, decision.reason))
-                    emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity,
-                                    OrderStatus.REJECTED, decision.reason))
+                    transition(order, OrderStatus.REJECTED, t, decision.reason)
 
     equity = pd.DataFrame([vars(p) for p in equity_points],
                           columns=["trading_date", "cash", "positions_value", "equity"])
@@ -225,7 +255,9 @@ def _open_phase(
     today: Mapping[int, Bar],
     executor: ExecutionSimulator,
     portfolio: Portfolio,
+    account: AccountView,
     emit,
+    transition,
 ) -> None:
     for order in due:
         if order.created_on >= t:
@@ -233,20 +265,27 @@ def _open_phase(
     by_id = {o.order_id: o for o in due}
     if len(by_id) != len(due):
         raise ExecutionError(f"Duplicate order ids among pending orders on {t}")
-    filled: set[int] = set()
-    for fill in executor.execute(due, today, t):
+    report = executor.execute(due, today, t, account)
+    done: set[int] = set()
+    for fill in report.fills:
         order = by_id.get(fill.order_id)
-        if order is None or fill.order_id in filled:
-            raise ExecutionError(f"Fill for unknown or already filled order {fill.order_id} on {t}")
+        if order is None or fill.order_id in done:
+            raise ExecutionError(f"Fill for unknown or already handled order {fill.order_id} on {t}")
         if fill.trading_date != t:
             raise ExecutionError(f"Fill for order {fill.order_id} dated {fill.trading_date}, expected {t}")
         if (fill.fin_code, fill.side, fill.quantity) != (order.fin_code, order.side, order.quantity):
             raise ExecutionError(f"Fill for order {fill.order_id} does not match the order (partial fills are not supported)")
-        filled.add(fill.order_id)
+        done.add(fill.order_id)
         portfolio.apply_fill(fill)
-        emit(FillEvent(t, fill.order_id, fill.fin_code, fill.side, fill.quantity, fill.price, fill.costs))
-        emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity, OrderStatus.FILLED))
+        emit(FillEvent(t, fill.order_id, fill.fin_code, fill.side, fill.quantity, fill.price, fill.costs,
+                       dict(fill.cost_breakdown)))
+        transition(order, OrderStatus.FILLED, t)
+    for order_id, reason in report.rejected.items():
+        order = by_id.get(order_id)
+        if order is None or order_id in done:
+            raise ExecutionError(f"Rejection for unknown or already handled order {order_id} on {t}")
+        done.add(order_id)
+        transition(order, OrderStatus.REJECTED, t, reason)
     for order in due:
-        if order.order_id not in filled:
-            emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity,
-                            OrderStatus.EXPIRED, "day order not filled"))
+        if order.order_id not in done:
+            transition(order, OrderStatus.EXPIRED, t, "day order not filled")
