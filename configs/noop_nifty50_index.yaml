@@ -1,0 +1,8 @@
+# M4 acceptance run: a strategy that never trades, over the Nifty 50 price index (fin_code 100256265).
+symbols: [100256265]
+start: 2018-01-01
+end: 2023-12-31
+initial_capital: 1000000
+seed: 0
+strategy:
+  name: noop

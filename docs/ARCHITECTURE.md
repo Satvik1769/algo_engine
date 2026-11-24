@@ -168,7 +168,7 @@ Inputs: daily equity series `E_t`, daily returns `r_t = E_t/E_{t−1} − 1`, `r
 See `docs/DECISIONS.md` for the full records. Summary:
 
 - Event-driven custom engine (ADR-0001): fidelity and live parity at the price of more code and slower sweeps.
-- Synchronous loop with logged events rather than an asynchronous message bus: simpler and deterministic. A bus can be introduced for live trading when real concurrency exists.
+- Synchronous loop with logged events rather than a message bus (ADR-0011): the loop owns phase ordering, components exchange immutable events through an `EventSink` (`engine/events.py`). A bus can be added later as another sink. Code: `src/algo_engine/engine/` (`loop.py` order of phases, `ports.py` interfaces for M6/M7, `guard.py` look-ahead check). Run output: `runs/<run_id>/{config.json, events.jsonl, equity.csv, manifest.json}`. Missing bars inside a symbol's history raise a `DataQualityEvent` and the symbol is valued at its last close; the strategy is not called for it.
 - Signals and orders are separate objects: strategies express intent; sizing, risk and execution remain replaceable.
 - Normalized bar layer between raw table and engine (ADR-0004).
 - Fills at next open (ADR-0006).

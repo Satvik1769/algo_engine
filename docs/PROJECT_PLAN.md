@@ -1,7 +1,7 @@
 # Project Plan
 
-Last updated: 2026-11-20 (documentation setup session).
-**Current phase: Milestone 2 complete. Next: Milestone 3 (data validation and normalization). Proposals O2-O7 in section 4 are in effect unless the user changes them.**
+Last updated: 2026-11-23 (M4 loop built).
+**Current phase: M4 loop done with stub order/risk/execution/portfolio. Next: M6 and M7 minimal versions behind the M4 ports, then run EMA crossover end to end. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -12,7 +12,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 1 | Repository and data infrastructure analysis | P0 | Yes | **Done** (docs only) |
 | 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
 | 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b, 3c done; Parquet cache and open data decisions remain) |
-| 4 | Core event-driven engine | P0 | Yes | Not started |
+| 4 | Core event-driven engine | P0 | Yes | **Done** (2026-11-23; runs with stub orders/execution/portfolio until M6/M7) |
 | 5 | Strategy interface and indicator engine | P0 | Yes | In progress (code and tests done; runs end to end only after M4) |
 | 6 | Order management and execution simulation | P0 | Yes | Not started |
 | 7 | Portfolio management | P0 | Yes | Not started |
@@ -114,6 +114,7 @@ Open:
 - Scope: single timeframe (daily), 1..N symbols, synchronous, deterministic, event log, run directory output.
 - Components: `engine/`, `events.py`, `config/RunConfig`.
 - Tasks: [ ] event dataclasses [ ] loop & ordering rules [ ] HistoryView (truncated) [ ] run config + snapshot [ ] event log [ ] seed handling.
+- Built (DONE 2026-11-23): [x] event dataclasses and `EventSink`/`EventLog` (hybrid: the loop owns ordering, components exchange immutable events through a sink; no pub/sub bus, ADR-0011) [x] loop and ordering rules (`engine/loop.py`) [x] `TruncatedHistory` [x] `RunConfig` from YAML or dict with JSON snapshot (`engine/config.py`) [x] run directory `runs/<run_id>/{config.json,events.jsonl,equity.csv,manifest.json}`, run id = hash(config + data fingerprint), no wall-clock values [x] look-ahead guard `find_lookahead`/`assert_no_lookahead` (`engine/guard.py`) [x] ports and no-op stubs (`engine/ports.py`: `Order`, `Fill`, `OrderManager`, `RiskManager`, `ExecutionSimulator`, `Portfolio`) [x] `noop` strategy [x] CLI `python -m algo_engine.engine.run --config configs/<file>.yaml` [x] 39 engine tests in `tests/unit/test_engine.py`. Seed is stored in the config and manifest; nothing consumes it yet (no random component exists). Real-data check: noop over Nifty 50 index 2018-2023, 1,484 days, byte-identical on rerun; EMA(12,26) gave 19 enter signals (the stub portfolio never holds, so no exits) and passed the guard at every 20th date.
 - Dependencies: M3 output schema; interfaces from M5–M7 (stubs first).
 - Acceptance: runs a no-op strategy over index data; identical output on rerun; no event at `t` references `t+1`.
 - Tests: look-ahead truncation test, determinism, ordering (fill for orders created at `t` occurs ≥ `t+1`), multi-symbol calendar alignment.
@@ -171,6 +172,8 @@ Open:
 - 2026-11-20: Repository and database inspection (read-only); four documentation files created. No application code or DB changes.
 
 ## 7. Next Recommended Tasks
+
+(2026-11-23, after M4) 1. M6/M7 minimal versions behind `engine/ports.py`: order state machine and sizing, cash risk check, next-open execution with costs and slippage, avg-cost portfolio with reconciliation; then run EMA crossover on the index. 2. Fix `Order`/`Fill` fields as M6 needs (stop price, time in force). 3. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 4. O3 capital default stays 1,000,000 unless you change it.
 
 (2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 

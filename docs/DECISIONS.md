@@ -109,3 +109,13 @@ so
 - Alternatives considered: (a) apply all corporate actions to raw prices (double-adjusts events already adjusted); (b) trust the stored series as-is (Reliance, Wipro, Shriram, Dr Reddy would show false crashes of 50-80%, producing false signals and stops); (c) obtain a clean adjusted source elsewhere (best quality, depends on data availability).
 - Reason for selection: Works with the data we have and fails loudly on ambiguity, consistent with the rule never to silently use invalid market data.
 - Trade-offs: More logic and a tolerance parameter for matching factors; some symbol-periods will be excluded; dividends are not in the price series so benchmark and strategy returns compare on a price basis plus explicit dividend cash.
+
+## ADR-0011: Hybrid event handling, YAML run configs
+- Date: 2026-11-23
+- Status: Accepted (user: "let's move with hybrid, add yaml too")
+- Decision: The engine loop is explicit and owns the order of phases (ARCHITECTURE section 4). Components exchange immutable events through an `EventSink` interface. In a backtest the sink is an in-memory `EventLog` that stamps a sequence number and the run writes it to `events.jsonl`. There is no publish/subscribe bus. Run configs are frozen dataclasses (`RunConfig`) loaded from YAML (PyYAML, `yaml.safe_load`) or a dict, validated at load, and stored as a canonical JSON snapshot. The run id is a hash of the snapshot plus the data fingerprint.
+- Context: The key rule is that an order created at `t` fills no earlier than `t+1`. A bus makes that depend on subscriber order and re-entrant publishing. The loop enforces it and raises `ExecutionError` if a component breaks it.
+- Alternatives considered: synchronous in-process bus with fixed handler order (about 60 extra lines plus ordering tests, no current consumer); async bus (not needed for daily bars).
+- Reason for selection: Keeps ordering visible and testable while leaving a seam: paper/live runners can pass a sink that forwards events, with no change to strategy, order, risk or portfolio code.
+- Trade-offs: A bus is not available for free later. Adding one means a new sink plus moving handler registration, and the loop would still own the phase order. New dependency: PyYAML 6.0.4 (YAML is the requested config format).
+- Known limit: the look-ahead guard compares truncated and full runs, so it catches strategies that read engine-supplied data beyond the view. A strategy that reads a file or global independent of the engine input is not detectable this way.
