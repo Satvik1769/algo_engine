@@ -1,7 +1,7 @@
 # Project Plan
 
-Last updated: 2026-11-23 (M8 analytics built).
-**Current phase: M4 to M8 done; EMA crossover runs end to end and `python -m algo_engine.analytics.run` scores a run. Next: minimal M9 report. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
+Last updated: 2026-11-23 (M9 minimal report built; MVP milestones 1-9 done except the M3 data cleanup).
+**Current phase: MVP pipeline complete: data, engine, orders, portfolio with dividends, analytics and a static HTML report. Next: M3 data cleanup and a stock-basket run once the 2024+ data is loaded, then M10 (optimization and robustness). M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -17,7 +17,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 6 | Order management and execution simulation | P0 | Yes | **Done** (2026-11-23) |
 | 7 | Portfolio management | P0 | Yes | **Done** (2026-11-23) |
 | 8 | Performance analytics | P0 | Yes | **Done** (2026-11-23) |
-| 9 | Reports and dashboard | P1 | Minimal static report only | Not started |
+| 9 | Reports and dashboard | P1 | Minimal static report only | **Minimal report done** (2026-11-23); Plotly charts and Streamlit app are post-MVP |
 | 10 | Optimization and robustness testing | P1 | No | Not started |
 | 11 | Paper trading | P2 | No | Not started |
 | 12 | Zerodha Kite integration | P2 | No | Not started |
@@ -162,7 +162,8 @@ Open:
 - Risks: annualization conventions; rf rate choice; benchmark date alignment.
 
 ### Milestone 9: Reports and dashboard
-- Tasks: [ ] static HTML/markdown report with equity, drawdown, trades, metrics, config, data fingerprint and caveats [ ] Plotly charts [ ] Streamlit app (post-MVP).
+- Tasks: [x] static HTML report with equity, drawdown, trades, metrics, config, data fingerprint and caveats [ ] Plotly charts (not needed, the report uses inline SVG, no new dependency) [ ] Streamlit app (post-MVP).
+- Built (DONE 2026-11-23): `reports/static.py` (`build_report`, `caveats`, SVG `line_chart`) and CLI `python -m algo_engine.reports.build --run-dir runs/<id>`; `python -m algo_engine.analytics.run --run-dir runs/<id> --report` scores and builds in one go. The report reads only the run directory (`config.json`, `manifest.json`, `equity.csv`, `trades.csv`, `metrics.json`, and `benchmark.csv`, which the analytics step now saves), so it can be rebuilt and is byte-identical for the same files. Sections: caveats first, setup, performance table (strategy vs benchmark, relative metrics), equity chart with the rebased benchmark, drawdown chart, trade statistics with bootstrap intervals, trade table (first 500), reproducibility (run id, bar and dividend fingerprints, seeds) and the config. Caveats always printed: survivorship (current constituents), in-sample, costs (current rates, slippage, DP placeholder, no T+1), dividends (none before 2022-08), data adjustment limits; plus benchmark label or the warning that no benchmark is included, a ZERO-cost diagnostic warning, an index-instrument warning and the metric warnings. All file values are HTML-escaped. 8 tests in `tests/unit/test_reports.py`. Visually checked the charts by rendering the SVG for the 2018-2023 index run.
 - Acceptance: report reproducible from run directory; caveats (survivorship, in-sample, costs) are always printed.
 
 ### Milestone 10: Optimization and robustness
@@ -183,7 +184,7 @@ Open:
 
 ## 7. Next Recommended Tasks
 
-(2026-11-23, after M8) 1. Minimal M9 static report from the run directory (equity, drawdown, trades, metrics, config, data fingerprint, caveats). 2. Optionally run a Nifty 50 stock basket once the 2024+ data is loaded (K18). 3. Cost follow-ups: confirm the DP charge on sells (K21, Rs 20 placeholder) and decide whether to add historical schedules (K22). 4. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 5. O3 capital default stays 1,000,000 unless you change it.
+(2026-11-23, after M9) 1. Run a Nifty 50 stock basket once the 2024+ data is loaded (K18), then re-run the per-year coverage check. 2. M10: parameter grid runner with a run registry, walk-forward and train/test split, cost and slippage stress tests, multiple-testing correction. 3. Cost follow-ups: confirm the DP charge on sells (K21, Rs 20 placeholder) and decide whether to add historical schedules (K22). 4. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 5. O3 capital default stays 1,000,000 unless you change it.
 
 (2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 
