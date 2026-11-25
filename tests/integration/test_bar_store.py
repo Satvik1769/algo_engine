@@ -99,3 +99,22 @@ def test_pipeline_loads_stock_and_calendar_index(store):
     assert result.rows_loaded == 6
     assert len(store.read_bars([1])) == 3 and len(store.read_bars([500])) == 3
     assert store.latest_run()["fingerprint"] == result.fingerprint
+
+
+def test_dividends_round_trip_and_replace(store):
+    divs = pd.DataFrame({"fin_code": [1, 1], "ex_date": [date(2024, 1, 2), date(2024, 1, 2)],
+                         "amount": [4.0, 1.0], "adj_factor": [0.5, 0.5], "adj_amount": [2.0, 0.5],
+                         "dividend_type": ["Final", None]})
+    bars = _bars()
+    store.replace_bars(bars, (1,), pd.DataFrame(), DataQualityReport(rows_in=2, rows_out=2),
+                       date(2024, 1, 1), date(2024, 1, 2), 99, bars_fingerprint(bars), divs)
+    out = store.read_dividends([1], date(2024, 1, 1), date(2024, 1, 31))
+    assert list(out["amount"]) == [0.5, 2.0] and list(out["ex_date"]) == [date(2024, 1, 2)] * 2
+    assert store.read_dividends([1], date(2024, 2, 1), None).empty
+    _replace(store, bars)                                    # dividends=None leaves them alone
+    assert len(store.read_dividends([1])) == 2
+    store.replace_dividends([1], divs.iloc[:1])
+    assert list(store.read_dividends([1])["amount"]) == [2.0]
+    with pytest.raises(IntegrityError):
+        store.replace_dividends([1], pd.concat([divs.iloc[:1], divs.iloc[:1]]))   # duplicate key
+    assert len(store.read_dividends([1])) == 1               # rolled back

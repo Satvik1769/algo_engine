@@ -145,3 +145,92 @@ def _fill_pnl(fills, bars) -> float:
                for f in fills)
     held = sum(f.quantity * (1 if f.side is Side.BUY else -1) for f in fills)
     return flow + held * bars["close"].iloc[-1]
+
+
+# ---- dividends ----
+
+def test_dividend_credits_cash_and_the_trade_and_ignores_unheld_symbols():
+    pf = AverageCostPortfolio(100_000)
+    assert pf.apply_dividend(1, 2.0, D) == 0.0                      # nothing held
+    pf.apply_fill(fill(Side.BUY, 100, 50.0, costs=10.0))
+    assert pf.apply_dividend(1, 2.5, D + timedelta(days=5)) == 250.0
+    assert pf.cash() == pytest.approx(100_000 - 5_010 + 250) and pf.total_dividends == 250.0
+    assert pf.open_dividends() == 250.0
+    pf.apply_fill(fill(Side.SELL, 100, 50.0, costs=10.0, day=D + timedelta(days=9)))
+    (t,) = pf.trades
+    assert t.dividends == 250.0 and t.gross_pnl == 0.0 and t.costs == 20.0 and t.net_pnl == pytest.approx(230.0)
+    assert pf.cash() - 100_000 == pytest.approx(t.net_pnl)
+    assert pf.apply_dividend(1, 2.5, D + timedelta(days=12)) == 0.0   # sold, nothing more to pay
+    with pytest.raises(ExecutionError):
+        pf.apply_dividend(1, 0.0, D)
+
+
+def test_random_sequences_with_dividends_keep_the_invariant():
+    for seed in range(10):
+        rng = random.Random(100 + seed)
+        initial = 300_000.0
+        pf = AverageCostPortfolio(initial)
+        day, price = D, 100.0
+        for step in range(150):
+            day += timedelta(days=1)
+            price *= rng.uniform(0.97, 1.03)
+            held = pf.position_qty(1)
+            r = rng.random()
+            if r < 0.2:
+                pf.apply_dividend(1, rng.uniform(0.1, 3), day)
+            elif held and r < 0.6:
+                pf.apply_fill(fill(Side.SELL, rng.randint(1, held), price, 5.0, day, 1, step))
+            else:
+                qty = int(min(pf.cash() - 5.0, 40_000) // price)
+                if qty >= 1:
+                    pf.apply_fill(fill(Side.BUY, qty, price, 5.0, day, 1, step))
+            point = pf.mark_to_market(day, {1: price})
+            realized = sum(t.net_pnl for t in pf.trades)
+            assert point.equity - initial == pytest.approx(
+                realized + pf.open_pnl() - pf.open_costs() + pf.open_dividends(), abs=1e-6)
+        assert sum(t.dividends for t in pf.trades) + pf.open_dividends() == pytest.approx(pf.total_dividends)
+
+
+def test_dividend_entitlement_in_the_loop():
+    from algo_engine.engine import DividendEvent
+    from algo_engine.strategy import Action, Signal, Strategy, register_strategy
+
+    script = {date(2024, 1, 2): Action.ENTER_LONG, date(2024, 1, 8): Action.EXIT_LONG}
+
+    @register_strategy("test_m7_scripted")
+    class Scripted(Strategy):
+        def on_bar(self, bar, history, portfolio):
+            action = script.get(bar.trading_date)
+            return [Signal(bar.fin_code, bar.trading_date, action, self.name, "script")] if action else []
+
+    dates = pd.bdate_range("2024-01-01", periods=10).date
+    bars = pd.DataFrame({"fin_code": 1, "trading_date": dates, "open": 100.0, "high": 101.0, "low": 99.0,
+                         "close": 100.0, "volume": 1000.0})
+    cfg = RunConfig.from_dict({"symbols": [1], "start": "2024-01-01", "end": "2024-12-31",
+                               "strategy": {"name": "test_m7_scripted"}})
+    # buy fills 2024-01-03 open, sell fills 2024-01-09 open
+    divs = pd.DataFrame({"fin_code": 1, "amount": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "ex_date": [
+        date(2023, 12, 20),   # before the run: ignored (nothing held)
+        date(2024, 1, 3),     # ex-date of the buy fill: NOT paid (not held at the previous close)
+        date(2024, 1, 5),     # held: paid
+        date(2024, 1, 6),     # Saturday: paid on the next trading day with the shares held then
+        date(2024, 1, 9),     # ex-date of the sell fill: paid (held at the previous close)
+        date(2024, 1, 10)]})  # already sold: NOT paid
+    res = run_backtest(cfg, bars, dividends=divs)
+    paid = [(e.ex_date, e.trading_date, e.quantity, e.amount_per_share, e.cash)
+            for e in res.events if isinstance(e, DividendEvent)]
+    qty = res.trades[0].quantity
+    assert paid == [(date(2024, 1, 5), date(2024, 1, 5), qty, 3.0, qty * 3.0),
+                    (date(2024, 1, 6), date(2024, 1, 8), qty, 4.0, qty * 4.0),
+                    (date(2024, 1, 9), date(2024, 1, 9), qty, 5.0, qty * 5.0)]
+    (trade,) = res.trades
+    assert trade.dividends == pytest.approx(qty * 12.0)
+    assert trade.net_pnl == pytest.approx(trade.gross_pnl - trade.costs + qty * 12.0)
+    # the dividends change the run id and leave equity higher than without them
+    plain = run_backtest(cfg, bars)
+    assert plain.run_id != res.run_id and not any(isinstance(e, DividendEvent) for e in plain.events)
+    assert res.equity["equity"].iloc[-1] == pytest.approx(plain.equity["equity"].iloc[-1] + qty * 12.0)
+    other_symbol = divs.assign(fin_code=2)
+    assert run_backtest(cfg, bars, dividends=other_symbol).run_id == plain.run_id   # not in the run: ignored
+    with pytest.raises(Exception, match="non-positive"):
+        run_backtest(cfg, bars, dividends=divs.assign(amount=0.0))
