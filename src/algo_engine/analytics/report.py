@@ -135,6 +135,15 @@ def _clean(value):
     return value
 
 
+def write_benchmark(run_dir: str | Path, benchmark: pd.Series, run_dates: list[date]) -> Path:
+    """Save the benchmark closes on the run's dates, so the report can be rebuilt from the run directory alone."""
+    common = benchmark.sort_index().loc[benchmark.index.intersection(run_dates)]
+    frame = pd.DataFrame({"trading_date": [d.isoformat() for d in common.index], "close": common.to_numpy()})
+    path = Path(run_dir) / "benchmark.csv"
+    frame.to_csv(path, index=False, lineterminator="\n")
+    return path
+
+
 def write_metrics(run_dir: str | Path, metrics: dict) -> Path:
     path = Path(run_dir) / "metrics.json"
     path.write_text(json.dumps(metrics, sort_keys=True, indent=2) + "\n", encoding="utf-8", newline="\n")
