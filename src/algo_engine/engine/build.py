@@ -1,8 +1,7 @@
 """Build the M6 components (sizing, risk, execution with costs and slippage) from a RunConfig.
 
 Imported lazily by callers so the engine package never depends on the component packages at import time.
-The default `run_backtest` still uses no-op stubs until the M7 portfolio exists, because the stub portfolio
-cannot apply fills.
+`run_backtest` uses these (and the M7 portfolio) by default.
 """
 from __future__ import annotations
 

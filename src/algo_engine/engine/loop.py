@@ -53,6 +53,7 @@ class RunResult:
     equity: pd.DataFrame
     calendar_days: int
     output_dir: Path | None = None
+    trades: tuple = ()
 
 
 class _ReadOnlyPortfolio:
@@ -144,10 +145,15 @@ def run_backtest(
     fingerprint = data_fingerprint(frame)
     run_id = make_run_id(config, fingerprint)
 
-    order_manager = order_manager or NoOpOrderManager()
-    risk_manager = risk_manager or AcceptAllRisk()
-    executor = executor or NoFillExecution()
-    portfolio = portfolio or CashOnlyPortfolio(config.initial_capital)
+    # Defaults are the real components (M6 sizing, risk, execution; M7 portfolio). Pass the no-op stubs from
+    # `engine.ports` to run without trading.
+    from algo_engine.engine.build import build_components
+    from algo_engine.portfolio import AverageCostPortfolio
+    components = build_components(config)
+    order_manager = order_manager or components.order_manager
+    risk_manager = risk_manager or components.risk_manager
+    executor = executor or components.executor
+    portfolio = portfolio or AverageCostPortfolio(config.initial_capital)
     log = EventLog()
     sinks: list[EventSink] = [log] + ([sink] if sink is not None else [])
 
@@ -234,11 +240,13 @@ def run_backtest(
 
     equity = pd.DataFrame([vars(p) for p in equity_points],
                           columns=["trading_date", "cash", "positions_value", "equity"])
-    result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar))
+    # Closed round trips, if the portfolio keeps a trade log (the no-op stub does not).
+    trades = tuple(getattr(portfolio, "trades", ()))
+    result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar), None, trades)
     if output_dir is not None:
         from algo_engine.engine.output import write_run
         result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar),
-                           write_run(Path(output_dir), result))
+                           write_run(Path(output_dir), result), trades)
     return result
 
 

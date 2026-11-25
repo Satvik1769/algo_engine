@@ -212,7 +212,7 @@ def test_runs_are_byte_identical_and_run_id_tracks_inputs(tmp_path: Path):
     r2 = run_backtest(cfg, bars.copy(), output_dir=tmp_path / "b")
     assert r1.run_id == r2.run_id and r1.data_fingerprint == r2.data_fingerprint
     names = sorted(p.name for p in r1.output_dir.iterdir())
-    assert names == ["config.json", "equity.csv", "events.jsonl", "manifest.json"]
+    assert names == ["config.json", "equity.csv", "events.jsonl", "manifest.json", "trades.csv"]
     for name in names:
         assert (r1.output_dir / name).read_bytes() == (r2.output_dir / name).read_bytes()
     other_cfg = run_backtest(config({"name": "ema_crossover", "params": {"fast": 2, "slow": 4}}), bars)

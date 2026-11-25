@@ -1,7 +1,7 @@
 # Project Plan
 
-Last updated: 2026-11-23 (M6 components built).
-**Current phase: M4 loop and M6 components done; the portfolio is still a stub. Next: M7 (portfolio), then run EMA crossover end to end. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
+Last updated: 2026-11-23 (M7 portfolio built; EMA crossover runs end to end).
+**Current phase: M4, M6 and M7 done; EMA crossover runs end to end on the index. Next: M8 (analytics), then a minimal M9 report. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -13,9 +13,9 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 2 | Historical data access layer | P0 | Yes | **Done** (2026-11-20) |
 | 3 | Data validation and normalization | P0 | Yes | In progress (3a, 3b, 3c done; Parquet cache and open data decisions remain) |
 | 4 | Core event-driven engine | P0 | Yes | **Done** (2026-11-23; runs with stub orders/execution/portfolio until M6/M7) |
-| 5 | Strategy interface and indicator engine | P0 | Yes | In progress (code and tests done; runs end to end only after M4) |
-| 6 | Order management and execution simulation | P0 | Yes | **Done** (2026-11-23; tested with a test ledger, runs end to end after M7) |
-| 7 | Portfolio management | P0 | Yes | Not started |
+| 5 | Strategy interface and indicator engine | P0 | Yes | **Done** (2026-11-23; EMA crossover runs end to end on the index) |
+| 6 | Order management and execution simulation | P0 | Yes | **Done** (2026-11-23) |
+| 7 | Portfolio management | P0 | Yes | **Done** (2026-11-23) |
 | 8 | Performance analytics | P0 | Yes | Not started |
 | 9 | Reports and dashboard | P1 | Minimal static report only | Not started |
 | 10 | Optimization and robustness testing | P1 | No | Not started |
@@ -144,7 +144,8 @@ Open:
 
 ### Milestone 7: Portfolio management
 - Objective: Correct accounting.
-- Tasks: [ ] cash/positions [ ] avg-cost P&L [ ] mark-to-market [ ] equity curve [ ] trade log (round trips) [ ] corporate action hooks (stub).
+- Tasks: [x] cash/positions [x] avg-cost P&L [x] mark-to-market [x] equity curve (loop, `equity.csv`) [x] trade log (round trips, `trades.csv`) [ ] corporate action hooks (not built; prices are already adjusted and dividends are not credited).
+- Built (DONE 2026-11-23): `portfolio/manager.py`, `AverageCostPortfolio` and `Trade`. Conventions are in the module docstring: buy cash = qty*price + costs, sell cash = qty*price - costs, average price is gross (costs are charged to the trade, not folded into the average), one `Trade` per round trip (partial sells stay inside it), fills that would overdraw cash or sell more than held raise `ExecutionError`. `run_backtest` and the CLI now default to `build_components` plus this portfolio; pass the no-op stubs from `engine.ports` to run without trading. `RunResult.trades` and `trades.csv` added; the CLI prints trades and final equity. 6 tests in `tests/unit/test_portfolio.py` (hand calculation, partial close, re-entry, invalid fills, 25 random fill sequences checking cash >= 0, equity = cash + positions, and equity - capital = realized net + open P&L - open costs, plus a default end-to-end run with byte-identical reruns). Real-data check: EMA(12,26) on Nifty 50 index 2018-2023: 1,484 days, 37 signals, 18 closed trades, final equity 1,944,036 from 1,000,000 with the last position still open; first buy (93 units, 2018-04-13) matched a hand calculation of quantity, slippage and costs; rerun byte-identical. Not done: dividends, T+1, drawdown and other metrics (M8).
 - Acceptance: invariants and reconciliation hold on randomized fill sequences.
 - Tests: property tests, partial close, re-entry, fees, dividends/splits (when implemented).
 - Risks: rounding drift; partial-position cost basis; costs counted twice.
@@ -178,7 +179,7 @@ Open:
 
 ## 7. Next Recommended Tasks
 
-(2026-11-23, after M6) 1. M7: avg-cost portfolio implementing `Portfolio` (`cash`, `equity`, `open_positions`, `apply_fill`, `mark_to_market`) with reconciliation and property tests; make `build_components` the default in `run_backtest`/CLI; run EMA crossover on the index and check by hand. 2. Cost follow-ups: confirm the DP charge on sells (K21) and decide whether to add historical schedules (K22). 3. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 4. O3 capital default stays 1,000,000 unless you change it.
+(2026-11-23, after M7) 1. M8: metrics module (CAGR, volatility, Sharpe, max drawdown, trade stats), Nifty 50 price-index benchmark loader labeled as price return, bootstrap CIs, tested on hand-computed fixtures. 2. Minimal M9 static report from the run directory, with caveats. 3. Cost follow-ups: confirm the DP charge on sells (K21, Rs 20 placeholder) and decide whether to add historical schedules (K22). 4. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 5. O3 capital default stays 1,000,000 unless you change it.
 
 (2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 

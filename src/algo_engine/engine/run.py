@@ -24,10 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     bars = BarStore.from_env().read_bars(list(config.symbols), config.start, config.end)
     result = run_backtest(config, bars, output_dir=args.out)
     print(f"run_id={result.run_id} days={result.calendar_days} events={len(result.events)} "
-          f"signals={len(result.signals)}")
+          f"signals={len(result.signals)} trades={len(result.trades)}")
+    final = result.equity["equity"].iloc[-1]
+    print(f"initial_capital={config.initial_capital:,.2f} final_equity={final:,.2f}")
     print(f"data_fingerprint={result.data_fingerprint}")
     print(f"written to {result.output_dir}")
-    print("Note: orders, execution and the portfolio are M4 stubs; this run places no trades.")
     return 0
 
 

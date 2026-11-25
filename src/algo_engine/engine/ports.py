@@ -1,8 +1,9 @@
 """Interfaces the loop needs from order management, risk, execution and the portfolio, plus no-op stubs.
 
 M6 provides the order manager, risk manager and execution simulator (`orders/`, `risk/`, `execution/`).
-M7 provides the real portfolio. Until then `CashOnlyPortfolio` holds the initial cash and cannot apply
-fills, so the default run places no trades (`build_components` in `engine/build.py` wires the M6 pieces).
+M7 provides the real portfolio (`portfolio/`). `run_backtest` uses them by default (`build_components` in
+`engine/build.py`). The no-op stubs below remain for tests and for runs that should not trade;
+`CashOnlyPortfolio` holds the initial cash and cannot apply fills.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-# Signals only until M6/M7 exist: orders, fills and the portfolio are stubs in M4.
+# EMA(12,26) crossover on the Nifty 50 price index, 2018-2023 (the clean data window).
 symbols: [100256265]
 start: 2018-01-01
 end: 2023-12-31
