@@ -7,6 +7,7 @@ from datetime import date
 
 import pandas as pd
 
+from algo_engine.data.dividends import build_dividends
 from algo_engine.data.adjust import AdjustmentConfig, adjust_bars, build_events, find_unexplained_jumps
 from algo_engine.data.normalize import (
     DataQualityReport, bars_fingerprint, build_calendar, find_missing_dates, normalize_bars,
@@ -25,6 +26,7 @@ class LoadResult:
     report: DataQualityReport
     events: pd.DataFrame           # per-event adjustment report (status applied / already_adjusted / ambiguous...)
     unexplained_jumps: pd.DataFrame
+    dividends: pd.DataFrame
 
 
 def load_bars(
@@ -53,14 +55,27 @@ def load_bars(
     stocks = bars[~is_index]
     report.missing_dates = find_missing_dates(stocks, calendar)
 
-    events = build_events(provider.get_corporate_actions(codes))
+    actions = provider.get_corporate_actions(codes)
+    events = build_events(actions)
     adjusted, event_report = adjust_bars(stocks, events, calendar, adjustment)
     index_bars = bars[is_index].assign(adj_factor=1.0)
     final = pd.concat([adjusted, index_bars], ignore_index=True).sort_values(
         ["fin_code", "trading_date"]).reset_index(drop=True)
 
+    dividends = build_dividends(actions, adjusted)
     fingerprint = bars_fingerprint(final)
     run_id = store.replace_bars(final, [*codes, int(calendar_code)], event_report, report,
-                                start, end, calendar_code, fingerprint)
+                                start, end, calendar_code, fingerprint, dividends)
     return LoadResult(run_id, fingerprint, len(final), report, event_report,
-                      find_unexplained_jumps(adjusted, calendar))
+                      find_unexplained_jumps(adjusted, calendar), dividends)
+
+
+def refresh_dividends(provider: MarketDataProvider, store: BarStore, fin_codes: Sequence[int]) -> pd.DataFrame:
+    """Rebuild the stored dividends from the source and the bars already in the store (bars are not touched)."""
+    codes = sorted({int(c) for c in fin_codes})
+    if not codes:
+        raise ValueError("fin_codes is empty")
+    bars = store.read_bars(codes)
+    dividends = build_dividends(provider.get_corporate_actions(codes), bars)
+    store.replace_dividends(codes, dividends)
+    return dividends

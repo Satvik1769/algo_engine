@@ -43,12 +43,13 @@ class BarStore:
 
     def migrate(self) -> None:
         """Create the schema and tables if missing. Safe to run repeatedly."""
-        sql = resources.files("algo_engine.data").joinpath("migrations/001_create_bars.sql").read_text()
-        sql = sql.format(schema=self._schema)
-        statements = [s.strip() for s in sql.split(";") if s.strip()]
+        files = sorted(f for f in resources.files("algo_engine.data").joinpath("migrations").iterdir()
+                       if f.name.endswith(".sql"))
         with self._engine.begin() as conn:
-            for stmt in statements:
-                conn.execute(text(stmt))
+            for f in files:
+                sql = f.read_text().format(schema=self._schema)
+                for stmt in (part.strip() for part in sql.split(";") if part.strip()):
+                    conn.execute(text(stmt))
 
     def replace_bars(
         self,
@@ -60,8 +61,13 @@ class BarStore:
         end: date,
         calendar_code: int,
         fingerprint: str,
+        dividends: pd.DataFrame | None = None,
     ) -> int:
-        """Replace the stored bars of `fin_codes` with `bars`; return the new run_id. All or nothing."""
+        """Replace the stored bars of `fin_codes` with `bars`; return the new run_id. All or nothing.
+
+        With `dividends` (see `data/dividends.py`), the stored dividends of these symbols are replaced in the
+        same transaction. `None` leaves them untouched.
+        """
         s = self._schema
         codes = [int(c) for c in fin_codes]
         quality = {
@@ -112,7 +118,39 @@ class BarStore:
                     f"INSERT INTO {s}.rejected_rows (run_id, fin_code, trading_date, reason, open, high, "
                     "low, close) VALUES (:run_id, :fin_code, :trading_date, :reason, :open, :high, "
                     ":low, :close)"), rows)
+            if dividends is not None:
+                self._replace_dividends(conn, codes, dividends)
         return int(run_id)
+
+    def _replace_dividends(self, conn, codes: list[int], dividends: pd.DataFrame) -> None:
+        conn.execute(text(f"DELETE FROM {self._schema}.dividends WHERE fin_code IN :codes")
+                     .bindparams(bindparam("codes", expanding=True)), {"codes": codes})
+        if len(dividends):
+            conn.execute(text(
+                f"INSERT INTO {self._schema}.dividends (fin_code, ex_date, amount, adj_factor, adj_amount, "
+                "dividend_type) VALUES (:fin_code, :ex_date, :amount, :adj_factor, :adj_amount, :dividend_type)"),
+                _records(dividends[["fin_code", "ex_date", "amount", "adj_factor", "adj_amount", "dividend_type"]]))
+
+    def replace_dividends(self, fin_codes: Sequence[int], dividends: pd.DataFrame) -> None:
+        """Replace the stored dividends of `fin_codes` without touching bars. All or nothing."""
+        with self._engine.begin() as conn:
+            self._replace_dividends(conn, [int(c) for c in fin_codes], dividends)
+
+    def read_dividends(self, fin_codes: Sequence[int], start: date | None = None,
+                       end: date | None = None) -> pd.DataFrame:
+        """Dividends with `amount` per share of the adjusted series, sorted by (ex_date, fin_code)."""
+        cols = ["fin_code", "ex_date", "amount"]
+        if not fin_codes:
+            return pd.DataFrame(columns=cols)
+        stmt = text(
+            f"SELECT fin_code, ex_date, adj_amount AS amount FROM {self._schema}.dividends "
+            "WHERE fin_code IN :codes AND ex_date >= COALESCE(:start, DATE '-infinity') "
+            "AND ex_date <= COALESCE(:end, DATE 'infinity') ORDER BY ex_date, fin_code, amount"
+        ).bindparams(bindparam("codes", expanding=True))
+        with self._engine.connect() as conn:
+            df = pd.read_sql_query(stmt, conn, params={
+                "codes": [int(c) for c in fin_codes], "start": start, "end": end})
+        return df[cols]
 
     def read_bars(self, fin_codes: Sequence[int], start: date | None = None,
                   end: date | None = None) -> pd.DataFrame:

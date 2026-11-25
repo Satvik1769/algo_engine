@@ -117,6 +117,10 @@ class ExecutionSimulator(Protocol):
 class Portfolio(AccountView, Protocol):
     def apply_fill(self, fill: Fill) -> None: ...
 
+    def apply_dividend(self, fin_code: int, amount_per_share: float, trading_date: date) -> float:
+        """Credit `amount_per_share` for every share held now; return the cash credited (0 if none held)."""
+        ...
+
     def mark_to_market(self, trading_date: date, closes: Mapping[int, float]) -> EquityPoint:
         """Value the portfolio at the given closing prices."""
         ...
@@ -159,6 +163,9 @@ class CashOnlyPortfolio:
 
     def apply_fill(self, fill: Fill) -> None:
         raise NotImplementedError("CashOnlyPortfolio cannot apply fills; use the M7 portfolio")
+
+    def apply_dividend(self, fin_code: int, amount_per_share: float, trading_date: date) -> float:
+        return 0.0
 
     def mark_to_market(self, trading_date: date, closes: Mapping[int, float]) -> EquityPoint:
         return EquityPoint(trading_date, self._cash, 0.0, self._cash)

@@ -20,7 +20,7 @@ def write_run(base_dir: Path, result: RunResult) -> Path:
     (out / "events.jsonl").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
     result.equity.to_csv(out / "equity.csv", index=False, lineterminator="\n")
     trade_columns = ["fin_code", "entry_date", "exit_date", "quantity", "entry_price", "exit_price",
-                     "gross_pnl", "costs", "net_pnl", "holding_days"]
+                     "gross_pnl", "costs", "dividends", "net_pnl", "holding_days"]
     pd.DataFrame([vars(t) for t in result.trades], columns=trade_columns).to_csv(
         out / "trades.csv", index=False, lineterminator="\n")
     manifest = {
@@ -33,6 +33,8 @@ def write_run(base_dir: Path, result: RunResult) -> Path:
         "events": len(result.events),
         "signals": len(result.signals),
         "trades": len(result.trades),
+        "dividends_credited": sum(1 for e in result.events if type(e).__name__ == "DividendEvent"),
+        "dividends_fingerprint": result.dividends_fingerprint,
         "seed": result.config.seed,
         "slippage_bps": result.config.slippage_bps,
         "cost_schedules": [c.effective_from.isoformat() for c in result.config.costs],

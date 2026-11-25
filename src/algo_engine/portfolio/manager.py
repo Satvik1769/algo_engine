@@ -9,9 +9,14 @@ Accounting conventions (all in rupees, prices are the fill prices that already i
 A round trip starts with the first BUY of a flat symbol and ends when the position returns to zero. Partial
 sells inside a round trip belong to the same trade. The trade log records one row per closed round trip.
 
+Dividends: `apply_dividend` credits amount_per_share * shares held at that moment to cash and to the open round
+trip. The loop calls it at the start of the ex-date, before that day's fills, so a position held at the previous
+close is paid (a buy filled on the ex-date is not, a sell filled on the ex-date still is). No tax or TDS.
+
 Invariants (checked by the tests): cash never goes below zero (a fill that would overdraw raises), a SELL never
 exceeds the position, `equity = cash + sum(quantity * close)`, and
-`equity - initial_cash = realized net P&L of closed trades + open-position P&L - costs of the open round trips`.
+`equity - initial_cash = net P&L of closed trades + open gross P&L - open costs + open dividends`,
+where a trade's `net_pnl = gross_pnl - costs + dividends`.
 
 Positions still open at the end of a run are not in the trade log; they are valued at the last close.
 """
@@ -39,8 +44,9 @@ class Trade:
     exit_price: float        # average sell price
     gross_pnl: float         # sum of (sell price - average cost) * quantity sold
     costs: float             # buy and sell costs of the round trip
-    net_pnl: float           # gross_pnl - costs
+    net_pnl: float           # gross_pnl - costs + dividends
     holding_days: int        # calendar days between entry and exit
+    dividends: float = 0.0   # cash dividends received during the round trip
 
 
 @dataclass
@@ -54,6 +60,7 @@ class _Position:
     sold_value: float = 0.0
     gross_pnl: float = 0.0
     costs: float = 0.0
+    dividends: float = 0.0
 
 
 class AverageCostPortfolio:
@@ -67,6 +74,7 @@ class AverageCostPortfolio:
         self._equity = float(initial_cash)
         self._trades: list[Trade] = []
         self._total_costs = 0.0
+        self._total_dividends = 0.0
 
     # AccountView
     def position_qty(self, fin_code: int) -> int:
@@ -124,8 +132,21 @@ class AverageCostPortfolio:
                 fin_code=fill.fin_code, entry_date=pos.opened_on, exit_date=fill.trading_date,
                 quantity=pos.bought_qty, entry_price=pos.bought_value / pos.bought_qty,
                 exit_price=pos.sold_value / pos.sold_qty, gross_pnl=pos.gross_pnl, costs=pos.costs,
-                net_pnl=pos.gross_pnl - pos.costs, holding_days=(fill.trading_date - pos.opened_on).days))
+                net_pnl=pos.gross_pnl - pos.costs + pos.dividends,
+                holding_days=(fill.trading_date - pos.opened_on).days, dividends=pos.dividends))
             del self._positions[fill.fin_code]
+
+    def apply_dividend(self, fin_code: int, amount_per_share: float, trading_date: date) -> float:
+        if not amount_per_share > 0:
+            raise ExecutionError(f"Dividend for {fin_code} on {trading_date}: amount must be positive")
+        pos = self._positions.get(fin_code)
+        if pos is None:
+            return 0.0
+        cash = pos.quantity * amount_per_share
+        pos.dividends += cash
+        self._cash += cash
+        self._total_dividends += cash
+        return cash
 
     def mark_to_market(self, trading_date: date, closes: Mapping[int, float]) -> EquityPoint:
         value = 0.0
@@ -147,6 +168,10 @@ class AverageCostPortfolio:
         """Costs of every fill applied so far (open and closed round trips)."""
         return self._total_costs
 
+    @property
+    def total_dividends(self) -> float:
+        return self._total_dividends
+
     def average_price(self, fin_code: int) -> float | None:
         pos = self._positions.get(fin_code)
         return pos.avg_price if pos else None
@@ -154,6 +179,10 @@ class AverageCostPortfolio:
     def open_costs(self) -> float:
         """Costs charged so far to round trips that are still open."""
         return sum(p.costs for p in self._positions.values())
+
+    def open_dividends(self) -> float:
+        """Dividends received so far in round trips that are still open."""
+        return sum(p.dividends for p in self._positions.values())
 
     def open_pnl(self) -> float:
         """Unrealized plus realized-but-not-yet-closed gross P&L of open round trips, at the last marks."""

@@ -12,7 +12,7 @@ import sys
 from datetime import date
 
 from algo_engine.config.settings import DbSettings, StoreSettings
-from algo_engine.data.pipeline import NIFTY50_INDEX_FIN_CODE, load_bars
+from algo_engine.data.pipeline import NIFTY50_INDEX_FIN_CODE, load_bars, refresh_dividends
 from algo_engine.data.postgres_provider import PostgresMarketDataProvider, create_readonly_engine
 from algo_engine.data.store import BarStore, create_store_engine
 
@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--end", type=date.fromisoformat, default=date.today())
     ap.add_argument("--fin-codes", type=int, nargs="+", help="explicit symbols (default: Nifty 50 members)")
     ap.add_argument("--index", type=int, default=NIFTY50_INDEX_FIN_CODE, help="calendar/universe index fin_code")
+    ap.add_argument("--dividends-only", action="store_true",
+                    help="rebuild only the dividends table from the stored bars; bars are not touched")
     ap.add_argument("--migrate-only", action="store_true", help="create the schema and tables, load nothing")
     args = ap.parse_args(argv)
 
@@ -40,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
 
     provider = PostgresMarketDataProvider(create_readonly_engine(src))
     codes = args.fin_codes or provider.get_index_members(args.index)
+    if args.dividends_only:
+        div = refresh_dividends(provider, store, [c for c in codes if c != args.index])
+        print(f"Stored {len(div)} dividends for {div['fin_code'].nunique()} symbols "
+              f"({div['ex_date'].min()} -> {div['ex_date'].max()}).")
+        return 0
     print(f"Loading {len(codes)} symbols {args.start} -> {args.end} ...")
     result = load_bars(provider, store, codes, args.start, args.end, args.index)
 
@@ -47,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     print(result.report.summary())
     if len(result.events):
         print("Adjustment events by status:", result.events["status"].value_counts().to_dict())
+    print(f"Dividends stored: {len(result.dividends)}")
     if len(result.unexplained_jumps):
         print(f"Unexplained overnight jumps after adjustment: {len(result.unexplained_jumps)} (review)")
     return 0

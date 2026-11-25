@@ -90,6 +90,16 @@ class FillEvent(Event):
 
 
 @dataclass(frozen=True)
+class DividendEvent(Event):
+    """Cash dividend credited for shares held before the ex-date. `trading_date` is the credit date."""
+    fin_code: int
+    ex_date: date
+    quantity: int
+    amount_per_share: float
+    cash: float
+
+
+@dataclass(frozen=True)
 class SignalSkippedEvent(Event):
     """A signal that produced no order (already long, no position to sell, quantity rounds to zero)."""
     fin_code: int

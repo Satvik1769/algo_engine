@@ -28,7 +28,7 @@ import pandas as pd
 from algo_engine.engine.config import RunConfig
 from algo_engine.engine.errors import BarDataError, ExecutionError, SignalError
 from algo_engine.engine.events import (
-    DataQualityEvent, Event, EventLog, EventSink, FillEvent, MarketEvent, OrderEvent, OrderStatus,
+    DataQualityEvent, DividendEvent, Event, EventLog, EventSink, FillEvent, MarketEvent, OrderEvent, OrderStatus,
     PortfolioUpdateEvent, RiskRejectionEvent, SignalEvent, SignalSkippedEvent,
 )
 from algo_engine.engine.history import SymbolSeries, TruncatedHistory
@@ -54,6 +54,7 @@ class RunResult:
     calendar_days: int
     output_dir: Path | None = None
     trades: tuple = ()
+    dividends_fingerprint: str = ""
 
 
 class _ReadOnlyPortfolio:
@@ -119,8 +120,31 @@ def data_fingerprint(frame: pd.DataFrame) -> str:
     return hashlib.sha256(row_hashes).hexdigest()
 
 
-def make_run_id(config: RunConfig, fingerprint: str) -> str:
-    return hashlib.sha256((config.snapshot_json() + fingerprint).encode("utf-8")).hexdigest()[:16]
+def prepare_dividends(config: RunConfig, dividends: pd.DataFrame | None) -> list[tuple[date, int, float]]:
+    """Dividends of the run's symbols as (ex_date, fin_code, amount per share), sorted. Raises BarDataError."""
+    if dividends is None or len(dividends) == 0:
+        return []
+    missing = [c for c in ("fin_code", "ex_date", "amount") if c not in dividends.columns]
+    if missing:
+        raise BarDataError(f"Dividends are missing columns: {missing}")
+    frame = dividends[["fin_code", "ex_date", "amount"]].copy()
+    if pd.api.types.is_datetime64_any_dtype(frame["ex_date"]):
+        frame["ex_date"] = frame["ex_date"].dt.date
+    if frame.isna().any().any() or not (frame["amount"] > 0).all():
+        raise BarDataError("Dividends contain nulls or non-positive amounts")
+    frame = frame[frame["fin_code"].isin(config.symbols)]
+    return sorted((row[0], int(row[1]), float(row[2])) for row in frame[["ex_date", "fin_code", "amount"]].itertuples(
+        index=False, name=None))
+
+
+def dividends_fingerprint(rows: list[tuple[date, int, float]]) -> str:
+    if not rows:
+        return ""
+    return hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+
+
+def make_run_id(config: RunConfig, fingerprint: str, dividend_fingerprint: str = "") -> str:
+    return hashlib.sha256((config.snapshot_json() + fingerprint + dividend_fingerprint).encode("utf-8")).hexdigest()[:16]
 
 
 def _bar(row: tuple) -> Bar:
@@ -139,11 +163,18 @@ def run_backtest(
     portfolio: Portfolio | None = None,
     sink: EventSink | None = None,
     output_dir: str | Path | None = None,
+    dividends: pd.DataFrame | None = None,
 ) -> RunResult:
-    """Run one backtest. `bars` is the store's bar table. With `output_dir`, results are written there."""
+    """Run one backtest. `bars` is the store's bar table. With `output_dir`, results are written there.
+
+    `dividends` (columns fin_code, ex_date, amount per share of the adjusted series, see `BarStore.read_dividends`)
+    are credited to holders at the start of the ex-date, before that day's fills.
+    """
     frame = prepare_bars(config, bars)
     fingerprint = data_fingerprint(frame)
-    run_id = make_run_id(config, fingerprint)
+    dividend_rows = prepare_dividends(config, dividends)
+    div_fingerprint = dividends_fingerprint(dividend_rows)
+    run_id = make_run_id(config, fingerprint, div_fingerprint)
 
     # Defaults are the real components (M6 sizing, risk, execution; M7 portfolio). Pass the no-op stubs from
     # `engine.ports` to run without trading.
@@ -186,8 +217,19 @@ def run_backtest(
     equity_points: list[EquityPoint] = []
     symbols = set(config.symbols)
 
+    next_dividend = 0
+
     for t in calendar:
         today = bars_by_date[t]
+
+        # 0. Dividends with an ex-date up to `t`: paid on the shares held before today's fills
+        while next_dividend < len(dividend_rows) and dividend_rows[next_dividend][0] <= t:
+            ex_date, code, amount = dividend_rows[next_dividend]
+            next_dividend += 1
+            qty = portfolio.position_qty(code)
+            if qty > 0:
+                cash = portfolio.apply_dividend(code, amount, t)
+                emit(DividendEvent(t, code, ex_date, qty, amount, cash))
 
         # 1. Open phase
         if pending:
@@ -242,11 +284,12 @@ def run_backtest(
                           columns=["trading_date", "cash", "positions_value", "equity"])
     # Closed round trips, if the portfolio keeps a trade log (the no-op stub does not).
     trades = tuple(getattr(portfolio, "trades", ()))
-    result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar), None, trades)
+    result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar), None, trades,
+                       div_fingerprint)
     if output_dir is not None:
         from algo_engine.engine.output import write_run
         result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar),
-                           write_run(Path(output_dir), result), trades)
+                           write_run(Path(output_dir), result), trades, div_fingerprint)
     return result
 
 
