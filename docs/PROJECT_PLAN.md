@@ -1,7 +1,7 @@
 # Project Plan
 
-Last updated: 2026-11-23 (M7 portfolio built; EMA crossover runs end to end).
-**Current phase: M4, M6 and M7 done; EMA crossover runs end to end on the index. Next: M8 (analytics), then a minimal M9 report. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
+Last updated: 2026-11-23 (M8 analytics built).
+**Current phase: M4 to M8 done; EMA crossover runs end to end and `python -m algo_engine.analytics.run` scores a run. Next: minimal M9 report. M3 cleanup (K18, K19, ambiguous events) is still open. Proposals O2-O7 in section 4 are in effect unless the user changes them.**
 
 Update this file after every task: status table, checkboxes, Known Issues, Next Recommended Tasks.
 
@@ -16,7 +16,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 5 | Strategy interface and indicator engine | P0 | Yes | **Done** (2026-11-23; EMA crossover runs end to end on the index) |
 | 6 | Order management and execution simulation | P0 | Yes | **Done** (2026-11-23) |
 | 7 | Portfolio management | P0 | Yes | **Done** (2026-11-23) |
-| 8 | Performance analytics | P0 | Yes | Not started |
+| 8 | Performance analytics | P0 | Yes | **Done** (2026-11-23) |
 | 9 | Reports and dashboard | P1 | Minimal static report only | Not started |
 | 10 | Optimization and robustness testing | P1 | No | Not started |
 | 11 | Paper trading | P2 | No | Not started |
@@ -154,7 +154,9 @@ Open:
 
 ### Milestone 8: Performance analytics
 - Objective: Metrics in ARCHITECTURE.md §8, benchmark comparison.
-- Tasks: [ ] metrics module [ ] benchmark loader (Nifty 50 price index now; TRI when available) [ ] trade stats [ ] bootstrap CIs.
+- Tasks: [x] metrics module [x] benchmark loader (Nifty 50 price index now; TRI when available) [x] trade stats [x] bootstrap CIs.
+- Built (DONE 2026-11-23): `analytics/metrics.py` (pure functions, formulas as in ARCHITECTURE section 8: total return, CAGR, volatility, Sharpe, Sortino, Calmar, max drawdown with peak/trough/recovery dates and longest time under water, exposure, beta/alpha/correlation/tracking error/information ratio, trade stats, seeded percentile bootstrap), `analytics/report.py` (`load_run`, `analyze`, `write_metrics`, `benchmark_series`, `format_summary`) and CLI `python -m algo_engine.analytics.run --run-dir runs/<id> [--rf 0.065] [--benchmark 100256265 | --no-benchmark] [--bootstrap 2000]`, which writes `metrics.json` into the run directory (deterministic bytes). Risk-free rate default 6.5%/yr (O7 proposal), passed to the analytics, not part of `RunConfig`. Undefined values are null in JSON (zero volatility, no trades, under two points, no downside), profit factor with no losses is "inf". Warnings always listed: fewer than 30 trades, history under one year, i.i.d. bootstrap, open positions excluded from trade stats, benchmark is a price index. Bootstrap uses the run's `seed`. 14 tests in `tests/unit/test_analytics.py` (hand-computed Sharpe/Sortino/CAGR/drawdown, known beta and alpha recovered, edge cases, seeded bootstrap, full run directory). Real check on the 2018-2023 index run (EMA 12/26): total return 94.4% (Nifty 50 price index 108.2%), Sharpe 0.53 at 6.5% rf (95% interval -0.27 to 1.33), max drawdown -11.7% vs -38.4%, beta 0.32, 18 trades, 50% win rate; all matched an independent pandas recomputation.
+- Limits: the Sharpe interval treats daily returns as independent (no block bootstrap); the benchmark is a price index (understates a TRI by roughly the dividend yield); equity-basket comparisons wait for the 2024+ data (K18).
 - Dependencies: M7, K3. Acceptance: metrics match hand-computed fixtures; edge cases defined.
 - Tests: flat equity, single trade, no losing trades (profit factor), zero-volatility Sharpe, short history, all-negative returns.
 - Risks: annualization conventions; rf rate choice; benchmark date alignment.
@@ -181,7 +183,7 @@ Open:
 
 ## 7. Next Recommended Tasks
 
-(2026-11-23, after M7) 1. M8: metrics module (CAGR, volatility, Sharpe, max drawdown, trade stats), Nifty 50 price-index benchmark loader labeled as price return, bootstrap CIs, tested on hand-computed fixtures. 2. Minimal M9 static report from the run directory, with caveats. 3. Cost follow-ups: confirm the DP charge on sells (K21, Rs 20 placeholder) and decide whether to add historical schedules (K22). 4. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 5. O3 capital default stays 1,000,000 unless you change it.
+(2026-11-23, after M8) 1. Minimal M9 static report from the run directory (equity, drawdown, trades, metrics, config, data fingerprint, caveats). 2. Optionally run a Nifty 50 stock basket once the 2024+ data is loaded (K18). 3. Cost follow-ups: confirm the DP charge on sells (K21, Rs 20 placeholder) and decide whether to add historical schedules (K22). 4. Close M3 items (K18, K19, ambiguous Wipro/Shriram, 4 unexplained jumps). 5. O3 capital default stays 1,000,000 unless you change it.
 
 (2026-11-23) User chose to build Milestone 5 before M4. M5 code is done; next is M4 (needs O3 capital and O7 date range), with M6/M7 interfaces as needed.
 
