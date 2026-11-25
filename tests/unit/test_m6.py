@@ -291,7 +291,7 @@ def test_config_defaults_and_roundtrip_with_custom_sections():
     base = {"symbols": [1], "start": "2024-01-01", "end": "2024-06-01", "strategy": {"name": "noop"}}
     cfg = RunConfig.from_dict(base)
     assert cfg.slippage_bps == 5.0 and cfg.sizing == SizingParams() and cfg.risk == RiskParams()
-    assert len(cfg.costs) == 1 and cfg.costs[0].dp_charge_per_sell == 0.0 and "zerodha.com/charges" in cfg.costs[0].source
+    assert len(cfg.costs) == 1 and cfg.costs[0].dp_charge_per_sell == 20.0 and "zerodha.com/charges" in cfg.costs[0].source
     custom = RunConfig.from_dict({**base, "slippage_bps": 10, "sizing": {"position_pct": 0.5},
                                   "risk": {"max_open_positions": 3},
                                   "costs": [{"effective_from": "2018-01-01", "stt_buy_rate": 0.002},

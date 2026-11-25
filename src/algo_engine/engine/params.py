@@ -92,7 +92,7 @@ class CostSchedule:
     """Charge rates in force from `effective_from` (until the next schedule). Delivery equity, NSE.
 
     GST applies to brokerage + SEBI fee + exchange transaction charge. `dp_charge_per_sell` is a flat rupee
-    amount per sell fill, GST included, and is NOT in the default schedule (rate unverified).
+    amount per sell fill, GST included, and is a Rs 20 placeholder in the default schedule (rate unverified).
     """
     effective_from: date
     source: str = ""
@@ -134,5 +134,7 @@ class CostSchedule:
 DEFAULT_COST_SCHEDULE = CostSchedule(
     effective_from=date(2000, 1, 1),
     source=("zerodha.com/charges, fetched 2026-11-23, equity delivery NSE. Applied to the whole backtest "
-            "window as an approximation (rates changed over time). DP charge on sells not included."),
+            "window as an approximation (rates changed over time). DP charge on sells is a placeholder of "
+            "Rs 20 per sell fill (user choice, to be confirmed)."),
+    dp_charge_per_sell=20.0,
 )
