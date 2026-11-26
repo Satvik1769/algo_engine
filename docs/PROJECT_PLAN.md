@@ -18,7 +18,7 @@ Update this file after every task: status table, checkboxes, Known Issues, Next 
 | 7 | Portfolio management | P0 | Yes | **Done** (2026-11-23) |
 | 8 | Performance analytics | P0 | Yes | **Done** (2026-11-23) |
 | 9 | Reports and dashboard | P1 | Minimal static report only | **Minimal report done** (2026-11-23); Plotly charts and Streamlit app are post-MVP |
-| 10 | Optimization and robustness testing | P1 | No | Not started |
+| 10 | Optimization and robustness testing | P1 | No | **Done except remaining roadmap strategies** (2026-11-26) |
 | 11 | Paper trading | P2 | No | Not started |
 | 12 | Zerodha Kite integration | P2 | No | Not started |
 
@@ -171,6 +171,8 @@ Open:
 
 ### Milestone 10: Optimization and robustness
 - Tasks: [ ] parameter grid runner with run registry [ ] walk-forward and train/test split [ ] parameter-sensitivity heatmaps [ ] Monte Carlo/bootstrapped trade shuffles [ ] multiple-testing correction (e.g. deflated Sharpe) [ ] cost/slippage stress tests [ ] remaining roadmap strategies.
+- Built (2026-11-26): package `research/`. `grid.py` (dotted-path grid expansion, `make_config`, `run_trial`, `run_grid`; combinations the config rejects are reported as invalid and are not trials), `splits.py` (`train_test_split`, rolling `walk_forward` by months, partial trailing folds dropped), `robustness.py` (deflated Sharpe per Bailey and Lopez de Prado with per-period Sharpes, trade-order shuffle and bootstrap Monte Carlo on rupee P&L, `scale_costs`), `heatmap.py` (SVG, no new dependency), `experiment.py` (`run_experiment`: modes `in_sample` (labelled as such), `split`, `walk_forward`; selection by the objective on the training window only; registry.csv with every trial, summary.json, heatmaps; experiment id hashes config, grid, mode, data and dividend fingerprints; output is deterministic) and CLI `python -m algo_engine.research.run --config <yaml> --grid configs/grid_ema.yaml [--test-start D | --walk-forward TRAIN_MONTHS TEST_MONTHS]`. Stress: selected config re-run over cost multipliers 0-3x and slippage 0-20 bps (split and in-sample modes only). 13 tests in `tests/unit/test_research.py` (including: changing only test-window prices does not change the selection). Real check, Nifty 50 index, EMA grid 5x5 (24 valid), train 2018-2021, test 2022-2023: selected fast 20 / slow 60 with train Sharpe 0.79 and deflated Sharpe 0.81, test Sharpe 0.15 on 4 trades, train/test rank correlation 0.02, so the selection did not carry over.
+- Limits: each window is a cold-start backtest with fresh capital (no indicator warm-up from the previous window); the deflated Sharpe counts only this grid's trials; the Monte Carlo treats trades as sequential and independent; stress is not run in walk-forward mode; no Plotly heatmaps (SVG only); remaining roadmap strategies are not built.
 - Acceptance: results show out-of-sample vs in-sample and number of trials.
 
 ### Milestone 11: Paper trading
