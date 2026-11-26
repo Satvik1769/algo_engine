@@ -104,6 +104,23 @@ def build_calendar(index_bars: pd.DataFrame) -> list[date]:
     return sorted(set(index_bars["trading_date"]))
 
 
+def build_trading_calendar(index_bars: pd.DataFrame, stock_bars: pd.DataFrame, min_share: float = 0.8) -> list[date]:
+    """Index trading dates plus any date on which at least `min_share` of the already-listed stocks have a bar.
+
+    The index series can have gaps that the stocks do not (K26: 133 weekdays in 2025-2026), and a calendar with
+    holes makes the adjuster and the backtest skip real sessions. A symbol counts as listed from its first bar.
+    """
+    index_days = set(index_bars["trading_date"])
+    if stock_bars.empty:
+        return sorted(index_days)
+    first = stock_bars.groupby("fin_code")["trading_date"].min().sort_values()
+    first_dates = first.to_numpy()
+    have = stock_bars.groupby("trading_date")["fin_code"].nunique()
+    listed = pd.Series(first_dates).searchsorted(have.index.to_numpy(), side="right")
+    stock_days = set(have.index[have.to_numpy() >= min_share * listed.clip(min=1)])
+    return sorted(index_days | stock_days)
+
+
 def find_missing_dates(bars: pd.DataFrame, calendar: list[date]) -> dict[int, list[date]]:
     """Calendar dates with no bar between each symbol's first and last bar. Gaps are reported, not filled."""
     missing: dict[int, list[date]] = {}

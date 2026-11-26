@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from algo_engine.data.normalize import (
-    bars_fingerprint, build_calendar, find_missing_dates, normalize_bars,
+    bars_fingerprint, build_calendar, build_trading_calendar, find_missing_dates, normalize_bars,
 )
 
 COLS = ["fin_code", "stock_type", "updated_time", "created_at", "trading_date", "open_price",
@@ -86,6 +86,20 @@ def test_missing_dates_inside_symbol_range_only():
     assert find_missing_dates(stock, cal) == {1: [D2]}
     late_start, _ = normalize_bars(raw(row(D3)))
     assert find_missing_dates(late_start, cal) == {}  # before first bar is not a gap
+
+
+def test_trading_calendar_adds_days_the_index_lacks():
+    index_bars, _ = normalize_bars(raw(row(D1, fin_code=9), row(D3, fin_code=9)))
+    stocks, _ = normalize_bars(raw(*[row(d, fin_code=c) for c in (1, 2, 3, 4, 5) for d in (D1, D2, D3)],
+                                   row(D3 + (D3 - D2), fin_code=1)))  # one stock alone on a later day
+    assert build_calendar(index_bars) == [D1, D3]
+    assert build_trading_calendar(index_bars, stocks) == [D1, D2, D3]  # D2 added; lone-stock day is not
+
+
+def test_trading_calendar_ignores_not_yet_listed_symbols():
+    index_bars, _ = normalize_bars(raw(row(D1, fin_code=9)))
+    stocks, _ = normalize_bars(raw(row(D1, fin_code=1), row(D2, fin_code=1), row(D2, fin_code=2)))
+    assert D2 in build_trading_calendar(index_bars, stocks)  # symbol 2 listed on D2 counts, no denominator penalty
 
 
 def test_fingerprint_deterministic_and_sensitive():

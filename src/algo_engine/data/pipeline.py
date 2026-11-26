@@ -10,7 +10,7 @@ import pandas as pd
 from algo_engine.data.dividends import build_dividends
 from algo_engine.data.adjust import AdjustmentConfig, adjust_bars, build_events, find_unexplained_jumps
 from algo_engine.data.normalize import (
-    DataQualityReport, bars_fingerprint, build_calendar, find_missing_dates, normalize_bars,
+    DataQualityReport, bars_fingerprint, build_trading_calendar, find_missing_dates, normalize_bars,
 )
 from algo_engine.data.provider import MarketDataProvider
 from algo_engine.data.store import BarStore
@@ -49,7 +49,7 @@ def load_bars(
     bars, report = normalize_bars(raw)
 
     is_index = bars["fin_code"] == calendar_code
-    calendar = build_calendar(bars[is_index])
+    calendar = build_trading_calendar(bars[is_index], bars[~is_index])
     if not calendar:
         raise RuntimeError(f"No bars for calendar index {calendar_code} between {start} and {end}")
     stocks = bars[~is_index]
