@@ -178,3 +178,19 @@ def test_in_sample_is_labelled_and_walk_forward_pools_out_of_sample():
     json.dumps(wf)  # JSON-safe
     with pytest.raises(ConfigError):
         run_experiment(base, GRID, bars, test_start=date(2021, 1, 1), walk=(12, 6))
+
+
+def test_buy_and_hold_reconciles_by_hand():
+    """One entry at the second bar's open (+5 bps slippage), held to the end: equity must match a hand calculation."""
+    from algo_engine.engine import run_backtest
+    bars = synthetic_bars(50)
+    cfg = RunConfig.from_dict({"symbols": [1], "start": bars["trading_date"].iloc[0], "end": bars["trading_date"].iloc[-1],
+                               "strategy": {"name": "buy_and_hold"}})
+    result = run_backtest(cfg, bars)
+    fills = [e for e in result.events if type(e).__name__ == "FillEvent"]
+    assert len(fills) == 1 and result.signals[0].reason == "first bar"
+    fill = fills[0]
+    assert fill.price == pytest.approx(bars["open"].iloc[1] * 1.0005)
+    assert fill.quantity == int(1_000_000 // (bars["close"].iloc[0] * 1.02))
+    expected = 1_000_000 - fill.quantity * fill.price - fill.costs + fill.quantity * bars["close"].iloc[-1]
+    assert result.equity["equity"].iloc[-1] == pytest.approx(expected)
