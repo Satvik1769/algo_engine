@@ -1,0 +1,7 @@
+# Runtime dependencies. Keep pinned; update in the same change as the code that needs them (CLAUDE.md).
+numpy==2.5.5          # numerical arrays
+pandas==2.3.3         # bar data frames
+SQLAlchemy==2.0.58    # DB access (Core, read-only queries)
+psycopg[binary]==3.2.13  # PostgreSQL driver
+python-dotenv==1.2.4  # load untracked .env (DB credentials) for local runs
+PyYAML==6.0.4         # YAML run configs (engine/config.py)

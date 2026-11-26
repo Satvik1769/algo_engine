@@ -1,0 +1,4 @@
+# Parameter grid for the EMA crossover (research runner). Combinations with fast >= slow are reported as invalid.
+grid:
+  strategy.params.fast: [5, 8, 12, 16, 20]
+  strategy.params.slow: [20, 26, 40, 60, 100]

@@ -1,0 +1,9 @@
+# Buy and hold the Nifty 50 price index: engine sanity check and baseline.
+symbols: [100256265]
+start: 2018-01-01
+end: 2023-12-31
+initial_capital: 1000000
+seed: 0
+strategy:
+  name: buy_and_hold
+  params: {}

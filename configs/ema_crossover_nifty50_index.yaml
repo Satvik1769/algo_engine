@@ -1,0 +1,9 @@
+# EMA(12,26) crossover on the Nifty 50 price index, 2018-2023 (the clean data window).
+symbols: [100256265]
+start: 2018-01-01
+end: 2023-12-31
+initial_capital: 1000000
+seed: 0
+strategy:
+  name: ema_crossover
+  params: {fast: 12, slow: 26}

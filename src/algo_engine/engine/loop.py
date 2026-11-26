@@ -1,0 +1,342 @@
+"""The chronological backtest loop (docs/ARCHITECTURE.md section 4).
+
+For each date `t` of the union calendar, in this fixed order:
+  1. Open phase: orders accepted on earlier bars go to the execution simulator with bar `t`. Fills go to the
+     portfolio. Day orders that did not fill expire.
+  2. Close phase: a MarketEvent per bar, then the portfolio is marked to market at the close of `t`.
+  3. The strategy sees bar `t`, history up to `t`, and a read-only portfolio, and returns signals.
+  4. The order manager turns signals into orders, risk validates them, accepted orders wait for `t+1`.
+Every order moves through the `OrderBook` state machine; an illegal transition raises.
+
+The loop owns the ordering. Components never call each other. An order created at `t` can only reach the
+executor in a later iteration, and the loop raises if a component breaks that rule.
+
+Missing bars: a symbol with no bar on `t` between its first and last bar gets a DataQualityEvent, receives
+no `on_bar` call, and is valued at its last close (carry with a flag, never a silent forward-fill).
+Dates before a symbol's first bar or after its last bar are not treated as missing.
+"""
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+
+import pandas as pd
+
+from algo_engine.engine.config import RunConfig
+from algo_engine.engine.errors import BarDataError, ExecutionError, SignalError
+from algo_engine.engine.events import (
+    DataQualityEvent, DividendEvent, Event, EventLog, EventSink, FillEvent, MarketEvent, OrderEvent, OrderStatus,
+    PortfolioUpdateEvent, RiskRejectionEvent, SignalEvent, SignalSkippedEvent,
+)
+from algo_engine.engine.history import SymbolSeries, TruncatedHistory
+from algo_engine.engine.orderbook import OrderBook
+from algo_engine.engine.ports import (
+    AcceptAllRisk, AccountView, CashOnlyPortfolio, EquityPoint, ExecutionSimulator, NoFillExecution,
+    NoOpOrderManager, Order, OrderManager, Portfolio, RiskManager,
+)
+from algo_engine.strategy import Bar, PortfolioView, Signal, StrategyContext, create_strategy
+
+ENGINE_COLUMNS = ["fin_code", "trading_date", "open", "high", "low", "close", "volume"]
+_PRICE_COLUMNS = ["open", "high", "low", "close"]
+
+
+@dataclass(frozen=True)
+class RunResult:
+    config: RunConfig
+    run_id: str
+    data_fingerprint: str
+    events: list[Event]
+    signals: list[Signal]
+    equity: pd.DataFrame
+    calendar_days: int
+    output_dir: Path | None = None
+    trades: tuple = ()
+    dividends_fingerprint: str = ""
+
+
+class _ReadOnlyPortfolio:
+    """What the strategy gets: positions only, no way to apply fills."""
+
+    def __init__(self, portfolio: PortfolioView) -> None:
+        self._portfolio = portfolio
+
+    def position_qty(self, fin_code: int) -> int:
+        return self._portfolio.position_qty(fin_code)
+
+
+class _ReadOnlyAccount:
+    """What order management, risk and the executor get: account state, no way to change it."""
+
+    def __init__(self, portfolio: Portfolio) -> None:
+        self._portfolio = portfolio
+
+    def position_qty(self, fin_code: int) -> int:
+        return self._portfolio.position_qty(fin_code)
+
+    def cash(self) -> float:
+        return self._portfolio.cash()
+
+    def equity(self) -> float:
+        return self._portfolio.equity()
+
+    def open_positions(self) -> int:
+        return self._portfolio.open_positions()
+
+
+def prepare_bars(config: RunConfig, bars: pd.DataFrame) -> pd.DataFrame:
+    """Select the run's symbols and dates and check them. Raises BarDataError, never repairs."""
+    missing_cols = [c for c in ENGINE_COLUMNS if c not in bars.columns]
+    if missing_cols:
+        raise BarDataError(f"Bars are missing columns: {missing_cols}")
+    frame = bars[ENGINE_COLUMNS].copy()
+    if pd.api.types.is_datetime64_any_dtype(frame["trading_date"]):
+        frame["trading_date"] = frame["trading_date"].dt.date
+    frame = frame[frame["fin_code"].isin(config.symbols)]
+    frame = frame[(frame["trading_date"] >= config.start) & (frame["trading_date"] <= config.end)]
+    frame = frame.reset_index(drop=True)
+    if frame.empty:
+        raise BarDataError(f"No bars for symbols {list(config.symbols)} between {config.start} and {config.end}")
+    absent = sorted(set(config.symbols) - set(frame["fin_code"]))
+    if absent:
+        raise BarDataError(f"No bars in the date range for symbols {absent}")
+    if frame.duplicated(["fin_code", "trading_date"]).any():
+        raise BarDataError("Duplicate (fin_code, trading_date) rows in the bars")
+    ordered = frame.sort_values(["fin_code", "trading_date"]).reset_index(drop=True)
+    if not (ordered["trading_date"].equals(frame["trading_date"]) and ordered["fin_code"].equals(frame["fin_code"])):
+        raise BarDataError("Bars must be sorted by (fin_code, trading_date)")
+    prices = frame[_PRICE_COLUMNS]
+    if prices.isna().any().any() or (prices <= 0).any().any():
+        raise BarDataError("Bars contain null or non-positive open/high/low/close")
+    frame["fin_code"] = frame["fin_code"].astype("int64")
+    return frame
+
+
+def data_fingerprint(frame: pd.DataFrame) -> str:
+    """SHA-256 of the bars the run used (same recipe as the data layer's bars_fingerprint)."""
+    row_hashes = pd.util.hash_pandas_object(frame[ENGINE_COLUMNS], index=False).to_numpy().tobytes()
+    return hashlib.sha256(row_hashes).hexdigest()
+
+
+def prepare_dividends(config: RunConfig, dividends: pd.DataFrame | None) -> list[tuple[date, int, float]]:
+    """Dividends of the run's symbols as (ex_date, fin_code, amount per share), sorted. Raises BarDataError."""
+    if dividends is None or len(dividends) == 0:
+        return []
+    missing = [c for c in ("fin_code", "ex_date", "amount") if c not in dividends.columns]
+    if missing:
+        raise BarDataError(f"Dividends are missing columns: {missing}")
+    frame = dividends[["fin_code", "ex_date", "amount"]].copy()
+    if pd.api.types.is_datetime64_any_dtype(frame["ex_date"]):
+        frame["ex_date"] = frame["ex_date"].dt.date
+    if frame.isna().any().any() or not (frame["amount"] > 0).all():
+        raise BarDataError("Dividends contain nulls or non-positive amounts")
+    frame = frame[frame["fin_code"].isin(config.symbols)]
+    return sorted((row[0], int(row[1]), float(row[2])) for row in frame[["ex_date", "fin_code", "amount"]].itertuples(
+        index=False, name=None))
+
+
+def dividends_fingerprint(rows: list[tuple[date, int, float]]) -> str:
+    if not rows:
+        return ""
+    return hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+
+
+def make_run_id(config: RunConfig, fingerprint: str, dividend_fingerprint: str = "") -> str:
+    return hashlib.sha256((config.snapshot_json() + fingerprint + dividend_fingerprint).encode("utf-8")).hexdigest()[:16]
+
+
+def _bar(row: tuple) -> Bar:
+    fin_code, trading_date, open_, high, low, close, volume = row
+    return Bar(int(fin_code), trading_date, float(open_), float(high), float(low), float(close),
+               None if pd.isna(volume) else float(volume))
+
+
+def run_backtest(
+    config: RunConfig,
+    bars: pd.DataFrame,
+    *,
+    order_manager: OrderManager | None = None,
+    risk_manager: RiskManager | None = None,
+    executor: ExecutionSimulator | None = None,
+    portfolio: Portfolio | None = None,
+    sink: EventSink | None = None,
+    output_dir: str | Path | None = None,
+    dividends: pd.DataFrame | None = None,
+) -> RunResult:
+    """Run one backtest. `bars` is the store's bar table. With `output_dir`, results are written there.
+
+    `dividends` (columns fin_code, ex_date, amount per share of the adjusted series, see `BarStore.read_dividends`)
+    are credited to holders at the start of the ex-date, before that day's fills.
+    """
+    frame = prepare_bars(config, bars)
+    fingerprint = data_fingerprint(frame)
+    dividend_rows = prepare_dividends(config, dividends)
+    div_fingerprint = dividends_fingerprint(dividend_rows)
+    run_id = make_run_id(config, fingerprint, div_fingerprint)
+
+    # Defaults are the real components (M6 sizing, risk, execution; M7 portfolio). Pass the no-op stubs from
+    # `engine.ports` to run without trading.
+    from algo_engine.engine.build import build_components
+    from algo_engine.portfolio import AverageCostPortfolio
+    components = build_components(config)
+    order_manager = order_manager or components.order_manager
+    risk_manager = risk_manager or components.risk_manager
+    executor = executor or components.executor
+    portfolio = portfolio or AverageCostPortfolio(config.initial_capital)
+    log = EventLog()
+    sinks: list[EventSink] = [log] + ([sink] if sink is not None else [])
+
+    def emit(event: Event) -> None:
+        for s in sinks:
+            s.emit(event)
+
+    series = {int(code): SymbolSeries(group) for code, group in frame.groupby("fin_code", sort=True)}
+    first_date = {code: s.dates[0] for code, s in series.items()}
+    last_date = {code: s.dates[-1] for code, s in series.items()}
+    bars_by_date: dict[date, dict[int, Bar]] = {}
+    for row in frame.itertuples(index=False, name=None):
+        bar = _bar(row)
+        bars_by_date.setdefault(bar.trading_date, {})[bar.fin_code] = bar
+    calendar = sorted(bars_by_date)
+
+    strategy = create_strategy(config.strategy)
+    strategy.on_start(StrategyContext(tuple(sorted(config.symbols))))
+    strategy_view = _ReadOnlyPortfolio(portfolio)
+    account = _ReadOnlyAccount(portfolio)
+    book = OrderBook()
+
+    def transition(order: Order, status: OrderStatus, t: date, reason: str = "") -> None:
+        book.transition(order.order_id, status)
+        emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity, status, reason))
+
+    pending: list[Order] = []
+    last_close: dict[int, float] = {}
+    all_signals: list[Signal] = []
+    equity_points: list[EquityPoint] = []
+    symbols = set(config.symbols)
+
+    next_dividend = 0
+
+    for t in calendar:
+        today = bars_by_date[t]
+
+        # 0. Dividends with an ex-date up to `t`: paid on the shares held before today's fills
+        while next_dividend < len(dividend_rows) and dividend_rows[next_dividend][0] <= t:
+            ex_date, code, amount = dividend_rows[next_dividend]
+            next_dividend += 1
+            qty = portfolio.position_qty(code)
+            if qty > 0:
+                cash = portfolio.apply_dividend(code, amount, t)
+                emit(DividendEvent(t, code, ex_date, qty, amount, cash))
+
+        # 1. Open phase
+        if pending:
+            due, pending = pending, []
+            _open_phase(t, due, today, executor, portfolio, account, emit, transition)
+
+        # 2. Close phase
+        for code in sorted(today):
+            b = today[code]
+            last_close[code] = b.close
+            emit(MarketEvent(t, b.fin_code, b.open, b.high, b.low, b.close, b.volume))
+        for code in sorted(symbols - set(today)):
+            if first_date[code] < t < last_date[code]:
+                emit(DataQualityEvent(t, code, "missing_bar",
+                                      f"no bar on {t}; valued at last close {last_close[code]}"))
+        point = portfolio.mark_to_market(t, dict(last_close))
+        equity_points.append(point)
+        emit(PortfolioUpdateEvent(t, point.cash, point.positions_value, point.equity))
+
+        # 3. Strategy
+        history = TruncatedHistory(series, t)
+        signals: list[Signal] = []
+        for code in sorted(today):
+            for sig in strategy.on_bar(today[code], history, strategy_view):
+                _check_signal(sig, t, symbols)
+                signals.append(sig)
+                emit(SignalEvent(t, sig.fin_code, sig.action.value, sig.strategy_id, sig.reason))
+        all_signals.extend(signals)
+
+        # 4. Orders and risk
+        if signals:
+            sizing = order_manager.create_orders(signals, account, today, t)
+            for skipped in sizing.skipped:
+                sig = skipped.signal
+                emit(SignalSkippedEvent(t, sig.fin_code, sig.action.value, skipped.reason))
+            for order in sizing.orders:
+                if order.created_on != t:
+                    raise ExecutionError(f"Order {order.order_id} created_on {order.created_on}, expected {t}")
+                if order.fin_code not in today:
+                    raise ExecutionError(f"Order {order.order_id} is for symbol {order.fin_code} with no bar on {t}")
+                book.register(order)
+                emit(OrderEvent(t, order.order_id, order.fin_code, order.side, order.quantity, OrderStatus.CREATED))
+                decision = risk_manager.validate(order, account, today[order.fin_code])
+                if decision.accepted:
+                    transition(order, OrderStatus.ACCEPTED, t)
+                    pending.append(order)
+                else:
+                    emit(RiskRejectionEvent(t, order.order_id, order.fin_code, decision.reason))
+                    transition(order, OrderStatus.REJECTED, t, decision.reason)
+
+    equity = pd.DataFrame([vars(p) for p in equity_points],
+                          columns=["trading_date", "cash", "positions_value", "equity"])
+    # Closed round trips, if the portfolio keeps a trade log (the no-op stub does not).
+    trades = tuple(getattr(portfolio, "trades", ()))
+    result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar), None, trades,
+                       div_fingerprint)
+    if output_dir is not None:
+        from algo_engine.engine.output import write_run
+        result = RunResult(config, run_id, fingerprint, log.events, all_signals, equity, len(calendar),
+                           write_run(Path(output_dir), result), trades, div_fingerprint)
+    return result
+
+
+def _check_signal(sig: Signal, t: date, symbols: set[int]) -> None:
+    if sig.fin_code not in symbols:
+        raise SignalError(f"Signal for symbol {sig.fin_code}, which is not in the run")
+    if sig.trading_date != t:
+        raise SignalError(f"Signal dated {sig.trading_date} returned while processing bar {t}")
+
+
+def _open_phase(
+    t: date,
+    due: Sequence[Order],
+    today: Mapping[int, Bar],
+    executor: ExecutionSimulator,
+    portfolio: Portfolio,
+    account: AccountView,
+    emit,
+    transition,
+) -> None:
+    for order in due:
+        if order.created_on >= t:
+            raise ExecutionError(f"Order {order.order_id} created on {order.created_on} offered for execution on {t}")
+    by_id = {o.order_id: o for o in due}
+    if len(by_id) != len(due):
+        raise ExecutionError(f"Duplicate order ids among pending orders on {t}")
+    report = executor.execute(due, today, t, account)
+    done: set[int] = set()
+    for fill in report.fills:
+        order = by_id.get(fill.order_id)
+        if order is None or fill.order_id in done:
+            raise ExecutionError(f"Fill for unknown or already handled order {fill.order_id} on {t}")
+        if fill.trading_date != t:
+            raise ExecutionError(f"Fill for order {fill.order_id} dated {fill.trading_date}, expected {t}")
+        if (fill.fin_code, fill.side, fill.quantity) != (order.fin_code, order.side, order.quantity):
+            raise ExecutionError(f"Fill for order {fill.order_id} does not match the order (partial fills are not supported)")
+        done.add(fill.order_id)
+        portfolio.apply_fill(fill)
+        emit(FillEvent(t, fill.order_id, fill.fin_code, fill.side, fill.quantity, fill.price, fill.costs,
+                       dict(fill.cost_breakdown)))
+        transition(order, OrderStatus.FILLED, t)
+    for order_id, reason in report.rejected.items():
+        order = by_id.get(order_id)
+        if order is None or order_id in done:
+            raise ExecutionError(f"Rejection for unknown or already handled order {order_id} on {t}")
+        done.add(order_id)
+        transition(order, OrderStatus.REJECTED, t, reason)
+    for order in due:
+        if order.order_id not in done:
+            transition(order, OrderStatus.EXPIRED, t, "day order not filled")
